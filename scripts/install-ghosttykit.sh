@@ -90,9 +90,13 @@ normalize_swiftpm_library_names() {
     fi
   done
 
+  # Rewrite the generated Ghostty names without matching the `ghostty-internal`
+  # portion inside `libghostty-internal.a`; doing that produces the invalid
+  # `liblibghostty.a` path that SwiftPM reports as a missing library.
   /usr/bin/sed -i '' \
-    -e 's/ghostty-internal\.a/libghostty.a/g' \
     -e 's/libghostty-internal-fat\.a/libghostty-fat.a/g' \
+    -e 's/libghostty-internal\.a/libghostty.a/g' \
+    -e 's/ghostty-internal\.a/libghostty.a/g' \
     "${xcframework_dir}/Info.plist"
 }
 

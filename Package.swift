@@ -26,8 +26,8 @@ let bundledGhosttyKitExists = fileManager.fileExists(atPath: localGhosttyKitAbso
 // `vendor/ghostty/macos/GhosttyKit.xcframework` and the local-vendor
 // preference above will use it. The URL below is consumed when no local
 // vendor is present (CI, downstream packages).
-let releaseGhosttyKitURL = "https://github.com/FauxFoxIO/Termini/releases/download/ghosttykit-0.2.0-visionos/GhosttyKit.xcframework.zip"
-let releaseGhosttyKitChecksum = "14fbcb60c1050d4d469e8891a4f8ca9f253269a705d58dd30e76dacfb8b09a6c"
+let releaseGhosttyKitURL = "https://github.com/FauxFoxIO/Termini/releases/download/ghosttykit-0.2.0-visionos-fixed/GhosttyKit.xcframework.zip"
+let releaseGhosttyKitChecksum = "e2d782049f4a21ac86f1f411bb684ec70b63db9f9b2f462df70e682dc41271ec"
 
 let ghosttyKitTarget: Target =
     if bundledGhosttyKitExists {
