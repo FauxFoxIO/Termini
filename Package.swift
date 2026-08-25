@@ -26,8 +26,8 @@ let bundledGhosttyKitExists = fileManager.fileExists(atPath: localGhosttyKitAbso
 // `vendor/ghostty/macos/GhosttyKit.xcframework` and the local-vendor
 // preference above will use it. The URL below is consumed when no local
 // vendor is present (CI, downstream packages).
-let releaseGhosttyKitURL = "https://github.com/arach/TermBridgeKit/releases/download/0.1.6/GhosttyKit.xcframework.zip"
-let releaseGhosttyKitChecksum = "7265c68e6e2120d8e3ed9bd9299177f6de9312fde492f7923e2af67b23ba1339"
+let releaseGhosttyKitURL = "https://github.com/FauxFoxIO/Termini/releases/download/ghosttykit-0.2.0-visionos/GhosttyKit.xcframework.zip"
+let releaseGhosttyKitChecksum = "48717193febf7ecfe92e039be1e318713bfa1b57c05cbba634e96357e85d6b29"
 
 let ghosttyKitTarget: Target =
     if bundledGhosttyKitExists {
@@ -50,15 +50,16 @@ let terminalLinkerSettings: [LinkerSetting] = [
     .linkedFramework("CoreGraphics"),
     .linkedFramework("CoreText"),
     .linkedFramework("Metal"),
-    .linkedFramework("UIKit", .when(platforms: [.iOS])),
-    .linkedFramework("QuartzCore", .when(platforms: [.iOS]))
+    .linkedFramework("UIKit", .when(platforms: [.iOS, .visionOS])),
+    .linkedFramework("QuartzCore", .when(platforms: [.iOS, .visionOS]))
 ]
 
 let package = Package(
     name: "Termini",
     platforms: [
         .macOS(.v14),
-        .iOS(.v17)
+        .iOS(.v17),
+        .visionOS(.v1)
     ],
     products: [
         .library(

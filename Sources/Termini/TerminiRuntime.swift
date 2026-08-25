@@ -47,8 +47,9 @@ final class TerminiRuntime: ObservableObject {
             return
         }
 
-        #if os(iOS)
-        // Ghostty's XDG lookup cannot discover a home directory inside an iOS
+        #if os(iOS) || os(visionOS)
+        // Ghostty's XDG lookup cannot discover a home directory inside an
+        // Apple mobile/immersive OS
         // app sandbox. Give the synchronous config load an explicit root so
         // embedded surfaces can honor font maps and other renderer settings.
         // Restore the process environment immediately afterward because

@@ -5,7 +5,7 @@
 Termini wraps [Ghostty](https://ghostty.org)'s terminal engine in a small, SwiftUI-first
 API. You get a real terminal surface (true colors, ligatures, Metal rendering) as an
 ordinary `View`, plus ready-made state machines for the two things people actually do:
-run a **local shell** (macOS) or connect over **SSH** (macOS + iOS).
+run a **local shell** (macOS) or connect over **SSH** (macOS, iOS, and visionOS).
 
 The SwiftUI surface is kept deliberately small so the rendering backend can change later
 without breaking your app.
@@ -50,7 +50,7 @@ demos, and go deeper.
 
 - 🖥️ **A terminal as a SwiftUI `View`** — `TerminiTerminalView(controller:)`, drop it anywhere.
 - 🐚 **Local shell on macOS** — `TerminiLocalPTYWorkspace` runs a `forkpty`-backed login shell.
-- 🔌 **SSH on macOS + iOS** — `TerminiSSHWorkspace` over SwiftNIO/NIOSSH, with trust-on-first-use host keys.
+- 🔌 **SSH on macOS + iOS + visionOS** — `TerminiSSHWorkspace` over SwiftNIO/NIOSSH, with trust-on-first-use host keys.
 - 🎨 **Themes & fonts** — `TerminiTerminalAppearance` for reusable color/font profiles.
 - 🧩 **Bring-your-own transport** — wire `TerminiTerminalController` to any byte stream you like.
 - 📦 **Zero manual setup** — SwiftPM downloads the prebuilt `GhosttyKit.xcframework` for you.
@@ -61,9 +61,10 @@ demos, and go deeper.
 |---|---|
 | macOS | 14+ |
 | iOS | 17+ |
+| visionOS | 1+ |
 | Toolchain | Swift 5.9 / Xcode 15+ |
 
-> iOS is **SSH-only**: the sandbox blocks local `fork`/PTY, so the local-shell APIs are macOS-only.
+> iOS and visionOS are **SSH-only**: their sandboxes block local `fork`/PTY, so the local-shell APIs are macOS-only.
 
 ## Install
 

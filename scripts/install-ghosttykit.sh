@@ -79,10 +79,14 @@ normalize_swiftpm_library_names() {
   fi
 
   local ios_dir
-  for ios_dir in "${xcframework_dir}/ios-arm64" "${xcframework_dir}"/ios-*-simulator; do
+  for ios_dir in "${xcframework_dir}/ios-arm64" "${xcframework_dir}"/ios-*-simulator \
+    "${xcframework_dir}/xros-arm64" "${xcframework_dir}"/xros-*-simulator; do
     [[ -d "${ios_dir}" ]] || continue
     if [[ -f "${ios_dir}/libghostty-internal-fat.a" ]]; then
       mv "${ios_dir}/libghostty-internal-fat.a" "${ios_dir}/libghostty-fat.a"
+    fi
+    if [[ -f "${ios_dir}/libghostty-internal.a" ]]; then
+      mv "${ios_dir}/libghostty-internal.a" "${ios_dir}/libghostty.a"
     fi
   done
 

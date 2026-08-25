@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verify that GhosttyKit can link universal iOS Simulator consumers.
+# Verify that GhosttyKit can link Apple mobile and immersive consumers.
 
 set -euo pipefail
 
@@ -32,3 +32,32 @@ for required in arm64 x86_64; do
 done
 
 echo "GhosttyKit iOS Simulator architectures: ${ARCHITECTURES}"
+
+verify_slice() {
+  local platform="$1"
+  local pattern="$2"
+  local required_arch="$3"
+  local slice_dir
+  slice_dir="$(find "${XCFRAMEWORK_PATH}" -mindepth 1 -maxdepth 1 -type d -name "${pattern}" -print -quit)"
+  if [[ -z "${slice_dir}" ]]; then
+    echo "error: GhosttyKit has no ${platform} slice" >&2
+    exit 1
+  fi
+  local library="${slice_dir}/libghostty-fat.a"
+  [[ -f "${library}" ]] || library="${slice_dir}/libghostty.a"
+  [[ -f "${library}" ]] || library="${slice_dir}/libghostty-internal.a"
+  if [[ ! -f "${library}" ]]; then
+    echo "error: ${platform} slice is missing normalized library" >&2
+    exit 1
+  fi
+  local architectures
+  architectures="$(lipo -archs "${library}")"
+  if [[ " ${architectures} " != *" ${required_arch} "* ]]; then
+    echo "error: ${platform} slice is missing ${required_arch} (found: ${architectures})" >&2
+    exit 1
+  fi
+  echo "GhosttyKit ${platform} architectures: ${architectures}"
+}
+
+verify_slice "visionOS device" 'xros-arm64' arm64
+verify_slice "visionOS Simulator" 'xros-*-simulator' arm64

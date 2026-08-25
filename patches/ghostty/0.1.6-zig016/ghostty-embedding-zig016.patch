@@ -1,8 +1,8 @@
 diff --git a/include/ghostty.h b/include/ghostty.h
-index 72bbb57a8..dbd13cfef 100644
+index df9472d21..d8936fa5c 100644
 --- a/include/ghostty.h
 +++ b/include/ghostty.h
-@@ -1011,6 +1011,7 @@ typedef void (*ghostty_runtime_write_clipboard_cb)(void*,
+@@ -1034,6 +1034,7 @@ typedef void (*ghostty_runtime_write_clipboard_cb)(void*,
                                                     const ghostty_clipboard_content_s*,
                                                     size_t,
                                                     bool);
@@ -10,7 +10,7 @@ index 72bbb57a8..dbd13cfef 100644
  typedef void (*ghostty_runtime_close_surface_cb)(void*, bool);
  typedef bool (*ghostty_runtime_action_cb)(ghostty_app_t,
                                            ghostty_target_s,
-@@ -1024,6 +1025,7 @@ typedef struct {
+@@ -1047,6 +1048,7 @@ typedef struct {
    ghostty_runtime_read_clipboard_cb read_clipboard_cb;
    ghostty_runtime_confirm_read_clipboard_cb confirm_read_clipboard_cb;
    ghostty_runtime_write_clipboard_cb write_clipboard_cb;
@@ -18,7 +18,7 @@ index 72bbb57a8..dbd13cfef 100644
    ghostty_runtime_close_surface_cb close_surface_cb;
  } ghostty_runtime_config_s;
  
-@@ -1075,6 +1077,12 @@ GHOSTTY_API void ghostty_config_load_file(ghostty_config_t, const char*);
+@@ -1099,6 +1101,12 @@ GHOSTTY_API void ghostty_config_load_file(ghostty_config_t, const char*);
  GHOSTTY_API void ghostty_config_load_default_files(ghostty_config_t);
  GHOSTTY_API void ghostty_config_load_recursive_files(ghostty_config_t);
  GHOSTTY_API void ghostty_config_finalize(ghostty_config_t);
@@ -31,7 +31,7 @@ index 72bbb57a8..dbd13cfef 100644
  GHOSTTY_API bool ghostty_config_get(ghostty_config_t, void*, const char*, uintptr_t);
  GHOSTTY_API ghostty_input_trigger_s ghostty_config_trigger(ghostty_config_t,
                                                                const char*,
-@@ -1127,6 +1135,7 @@ GHOSTTY_API bool ghostty_surface_key_is_binding(ghostty_surface_t,
+@@ -1151,6 +1159,7 @@ GHOSTTY_API bool ghostty_surface_key_is_binding(ghostty_surface_t,
                                                     ghostty_input_key_s,
                                                     ghostty_binding_flags_e*);
  GHOSTTY_API void ghostty_surface_text(ghostty_surface_t, const char*, uintptr_t);
@@ -40,10 +40,10 @@ index 72bbb57a8..dbd13cfef 100644
  GHOSTTY_API bool ghostty_surface_mouse_captured(ghostty_surface_t);
  GHOSTTY_API bool ghostty_surface_mouse_button(ghostty_surface_t,
 diff --git a/src/Surface.zig b/src/Surface.zig
-index c56c9791c..722324fed 100644
+index 3002e9f58..5efd6ae7d 100644
 --- a/src/Surface.zig
 +++ b/src/Surface.zig
-@@ -645,21 +645,29 @@ pub fn init(
+@@ -654,21 +654,26 @@ pub fn init(
              std.fmt.bufPrint(&buf, "0x{x:0>16}", .{self.id}) catch unreachable,
          );
  
@@ -56,7 +56,7 @@ index c56c9791c..722324fed 100644
 -            .shell_integration_features = config.@"shell-integration-features",
 -            .cursor_blink = config.@"cursor-style-blink",
 -            .working_directory = if (config.@"working-directory") |wd| wd.value() else null,
--            .resources_dir = global_state.resources_dir.host(),
+-            .resources_dir = global.resourcesDir().host(),
 -            .term = config.term,
 -            .rt_pre_exec_info = .init(config),
 -            .rt_post_fork_info = .init(config),
@@ -64,11 +64,8 @@ index c56c9791c..722324fed 100644
 -        errdefer io_exec.deinit();
 +        const io_backend = io_backend: {
 +            if (comptime @hasDecl(apprt.runtime.Surface, "termioBackend")) {
-+                if (rt_surface.termioBackend()) |backend| {
-+                    break :io_backend backend;
-+                }
++                if (rt_surface.termioBackend()) |backend| break :io_backend backend;
 +            }
-+
 +            var io_exec = try termio.Exec.init(alloc, .{
 +                .command = command,
 +                .env = env,
@@ -77,7 +74,7 @@ index c56c9791c..722324fed 100644
 +                .shell_integration_features = config.@"shell-integration-features",
 +                .cursor_blink = config.@"cursor-style-blink",
 +                .working_directory = if (config.@"working-directory") |wd| wd.value() else null,
-+                .resources_dir = global_state.resources_dir.host(),
++                .resources_dir = global.resourcesDir().host(),
 +                .term = config.term,
 +                .rt_pre_exec_info = .init(config),
 +                .rt_post_fork_info = .init(config),
@@ -88,7 +85,7 @@ index c56c9791c..722324fed 100644
  
          // Initialize our IO mailbox
          var io_mailbox = try termio.Mailbox.initSPSC(alloc);
-@@ -669,7 +677,7 @@ pub fn init(
+@@ -678,7 +683,7 @@ pub fn init(
              .size = size,
              .full_config = config,
              .config = try termio.Termio.DerivedConfig.init(alloc, config),
@@ -97,7 +94,7 @@ index c56c9791c..722324fed 100644
              .mailbox = io_mailbox,
              .renderer_state = &self.renderer_state,
              .renderer_wakeup = render_thread.wakeup,
-@@ -1313,6 +1321,7 @@ fn childExitedAbnormally(
+@@ -1333,6 +1338,7 @@ fn childExitedAbnormally(
      // Build up our command for the error message
      const command = try std.mem.join(alloc, " ", switch (self.io.backend) {
          .exec => |*exec| exec.subprocess.args,
@@ -106,10 +103,10 @@ index c56c9791c..722324fed 100644
      const runtime_str = try std.fmt.allocPrint(alloc, "{d} ms", .{info.runtime_ms});
  
 diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
-index 7310159cc..7fc979d03 100644
+index a380dc50c..cb3870209 100644
 --- a/src/apprt/embedded.zig
 +++ b/src/apprt/embedded.zig
-@@ -21,6 +21,7 @@ const CoreSurface = @import("../Surface.zig");
+@@ -22,6 +22,7 @@ const CoreSurface = @import("../Surface.zig");
  const configpkg = @import("../config.zig");
  const Config = configpkg.Config;
  const String = @import("../main_c.zig").String;
@@ -117,7 +114,7 @@ index 7310159cc..7fc979d03 100644
  
  const log = std.log.scoped(.embedded_window);
  
-@@ -76,6 +77,9 @@ pub const App = struct {
+@@ -77,6 +78,9 @@ pub const App = struct {
              bool,
          ) callconv(.c) void,
  
@@ -127,7 +124,7 @@ index 7310159cc..7fc979d03 100644
          /// Close the current surface given by this function.
          close_surface: ?*const fn (SurfaceUD, bool) callconv(.c) void = null,
      };
-@@ -981,6 +985,15 @@ pub const Surface = struct {
+@@ -1000,6 +1004,15 @@ pub const Surface = struct {
          return env;
      }
  
@@ -143,7 +140,7 @@ index 7310159cc..7fc979d03 100644
      /// The cursor position from the host directly is in screen coordinates but
      /// all our interface works in pixels.
      fn cursorPosToPixels(self: *const Surface, pos: apprt.CursorPos) !apprt.CursorPos {
-@@ -1823,6 +1836,15 @@ pub const CAPI = struct {
+@@ -1827,6 +1840,15 @@ pub const CAPI = struct {
          surface.textCallback(ptr[0..len]);
      }
  
@@ -160,7 +157,7 @@ index 7310159cc..7fc979d03 100644
      /// composition. If the length is 0, then the preedit text is cleared.
      export fn ghostty_surface_preedit(
 diff --git a/src/config/CApi.zig b/src/config/CApi.zig
-index 7d3366c93..4f0f4e047 100644
+index f69f48ea4..6d2ddf04d 100644
 --- a/src/config/CApi.zig
 +++ b/src/config/CApi.zig
 @@ -90,6 +90,36 @@ export fn ghostty_config_finalize(self: *Config) void {
@@ -280,141 +277,6 @@ index b16885109..e2860fe2a 100644
  pub const Options = @import("termio/Options.zig");
  pub const Termio = @import("termio/Termio.zig");
  pub const Thread = @import("termio/Thread.zig");
-diff --git a/src/termio/Host.zig b/src/termio/Host.zig
-new file mode 100644
-index 000000000..8a1d43bd6
---- /dev/null
-+++ b/src/termio/Host.zig
-@@ -0,0 +1,128 @@
-+//! Host implements a termio backend that forwards writes to an embedding
-+//! host application instead of a pty-backed subprocess.
-+const Host = @This();
-+
-+const std = @import("std");
-+const Allocator = std.mem.Allocator;
-+const renderer = @import("../renderer.zig");
-+const terminal = @import("../terminal/main.zig");
-+const termio = @import("../termio.zig");
-+const ProcessInfo = @import("../pty.zig").ProcessInfo;
-+
-+pub const Config = struct {
-+    userdata: ?*anyopaque,
-+    write: *const fn (?*anyopaque, [*]const u8, usize) callconv(.c) void,
-+};
-+
-+pub const ThreadData = struct {
-+    pub fn deinit(self: *ThreadData, alloc: Allocator) void {
-+        _ = self;
-+        _ = alloc;
-+    }
-+};
-+
-+config: Config,
-+
-+pub fn init(cfg: Config) Host {
-+    return .{ .config = cfg };
-+}
-+
-+pub fn deinit(self: *Host) void {
-+    _ = self;
-+}
-+
-+pub fn initTerminal(self: *Host, term: *terminal.Terminal) void {
-+    self.resize(.{
-+        .columns = term.cols,
-+        .rows = term.rows,
-+    }, .{
-+        .width = term.width_px,
-+        .height = term.height_px,
-+    }) catch {};
-+}
-+
-+pub fn threadEnter(
-+    self: *Host,
-+    _: Allocator,
-+    _: *termio.Termio,
-+    td: *termio.Termio.ThreadData,
-+) !void {
-+    td.backend = .{ .host = .{} };
-+    _ = self;
-+}
-+
-+pub fn threadExit(self: *Host, td: *termio.Termio.ThreadData) void {
-+    _ = self;
-+    _ = td;
-+}
-+
-+pub fn focusGained(
-+    self: *Host,
-+    td: *termio.Termio.ThreadData,
-+    focused: bool,
-+) !void {
-+    _ = self;
-+    _ = td;
-+    _ = focused;
-+}
-+
-+pub fn resize(
-+    self: *Host,
-+    _: renderer.GridSize,
-+    _: renderer.ScreenSize,
-+) !void {
-+    _ = self;
-+}
-+
-+pub fn queueWrite(
-+    self: *Host,
-+    alloc: Allocator,
-+    td: *termio.Termio.ThreadData,
-+    data: []const u8,
-+    linefeed: bool,
-+) !void {
-+    _ = td;
-+
-+    if (!linefeed) {
-+        self.config.write(self.config.userdata, data.ptr, data.len);
-+        return;
-+    }
-+
-+    var buf: std.ArrayListUnmanaged(u8) = .{};
-+    defer buf.deinit(alloc);
-+
-+    try buf.ensureTotalCapacityPrecise(alloc, data.len);
-+
-+    for (data) |ch| {
-+        if (ch != '\r') {
-+            try buf.append(alloc, ch);
-+            continue;
-+        }
-+
-+        try buf.appendSlice(alloc, &.{ '\r', '\n' });
-+    }
-+
-+    const slice = buf.items;
-+    if (slice.len > 0) {
-+        self.config.write(self.config.userdata, slice.ptr, slice.len);
-+    }
-+}
-+
-+pub fn childExitedAbnormally(
-+    self: *Host,
-+    gpa: Allocator,
-+    t: *terminal.Terminal,
-+    exit_code: u32,
-+    runtime_ms: u64,
-+) !void {
-+    _ = self;
-+    _ = gpa;
-+    _ = t;
-+    _ = exit_code;
-+    _ = runtime_ms;
-+}
-+
-+pub fn getProcessInfo(self: *Host, comptime info: ProcessInfo) ?ProcessInfo.Type(info) {
-+    _ = self;
-+    return null;
-+}
-\ No newline at end of file
 diff --git a/src/termio/backend.zig b/src/termio/backend.zig
 index c29009acb..341aae87e 100644
 --- a/src/termio/backend.zig
@@ -526,3 +388,137 @@ index c29009acb..341aae87e 100644
          }
      }
  
+diff --git a/src/termio/Host.zig b/src/termio/Host.zig
+new file mode 100644
+index 000000000..e11f52ae3
+--- /dev/null
++++ b/src/termio/Host.zig
+@@ -0,0 +1,128 @@
++//! Host implements a termio backend that forwards writes to an embedding
++//! host application instead of a pty-backed subprocess.
++const Host = @This();
++
++const std = @import("std");
++const Allocator = std.mem.Allocator;
++const renderer = @import("../renderer.zig");
++const terminal = @import("../terminal/main.zig");
++const termio = @import("../termio.zig");
++const ProcessInfo = @import("../pty.zig").ProcessInfo;
++
++pub const Config = struct {
++    userdata: ?*anyopaque,
++    write: *const fn (?*anyopaque, [*]const u8, usize) callconv(.c) void,
++};
++
++pub const ThreadData = struct {
++    pub fn deinit(self: *ThreadData, alloc: Allocator) void {
++        _ = self;
++        _ = alloc;
++    }
++};
++
++config: Config,
++
++pub fn init(cfg: Config) Host {
++    return .{ .config = cfg };
++}
++
++pub fn deinit(self: *Host) void {
++    _ = self;
++}
++
++pub fn initTerminal(self: *Host, term: *terminal.Terminal) void {
++    self.resize(.{
++        .columns = term.cols,
++        .rows = term.rows,
++    }, .{
++        .width = term.width_px,
++        .height = term.height_px,
++    }) catch {};
++}
++
++pub fn threadEnter(
++    self: *Host,
++    _: Allocator,
++    _: *termio.Termio,
++    td: *termio.Termio.ThreadData,
++) !void {
++    td.backend = .{ .host = .{} };
++    _ = self;
++}
++
++pub fn threadExit(self: *Host, td: *termio.Termio.ThreadData) void {
++    _ = self;
++    _ = td;
++}
++
++pub fn focusGained(
++    self: *Host,
++    td: *termio.Termio.ThreadData,
++    focused: bool,
++) !void {
++    _ = self;
++    _ = td;
++    _ = focused;
++}
++
++pub fn resize(
++    self: *Host,
++    _: renderer.GridSize,
++    _: renderer.ScreenSize,
++) !void {
++    _ = self;
++}
++
++pub fn queueWrite(
++    self: *Host,
++    alloc: Allocator,
++    td: *termio.Termio.ThreadData,
++    data: []const u8,
++    linefeed: bool,
++) !void {
++    _ = td;
++
++    if (!linefeed) {
++        self.config.write(self.config.userdata, data.ptr, data.len);
++        return;
++    }
++
++    var buf: std.ArrayListUnmanaged(u8) = .empty;
++    defer buf.deinit(alloc);
++
++    try buf.ensureTotalCapacityPrecise(alloc, data.len);
++
++    for (data) |ch| {
++        if (ch != '\r') {
++            try buf.append(alloc, ch);
++            continue;
++        }
++
++        try buf.appendSlice(alloc, &.{ '\r', '\n' });
++    }
++
++    const slice = buf.items;
++    if (slice.len > 0) {
++        self.config.write(self.config.userdata, slice.ptr, slice.len);
++    }
++}
++
++pub fn childExitedAbnormally(
++    self: *Host,
++    gpa: Allocator,
++    t: *terminal.Terminal,
++    exit_code: u32,
++    runtime_ms: u64,
++) !void {
++    _ = self;
++    _ = gpa;
++    _ = t;
++    _ = exit_code;
++    _ = runtime_ms;
++}
++
++pub fn getProcessInfo(self: *Host, comptime info: ProcessInfo) ?ProcessInfo.Type(info) {
++    _ = self;
++    return null;
++}

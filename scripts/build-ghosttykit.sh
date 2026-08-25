@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # Build GhosttyKit.xcframework from a local Ghostty checkout and install it
-# into Termini's vendored path.
+# into Termini's vendored path. The source must emit macOS, iOS (including
+# universal Simulator), and visionOS device/Simulator slices.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GHOSTTY_DIR="${GHOSTTY_DIR:-${REPO_ROOT}/vendor/ghostty}"
-GHOSTTY_REPO="${GHOSTTY_REPO:-https://github.com/ghostty-org/ghostty.git}"
-GHOSTTY_REF="${GHOSTTY_REF:-}"
+GHOSTTY_REPO="${GHOSTTY_REPO:-git@github.com:FauxFoxIO/ghostty.git}"
+GHOSTTY_REF="${GHOSTTY_REF:-d71bcd105abafd03a5da4cb389219e4ecae01b07}"
 GHOSTTY_OPTIMIZE="${GHOSTTY_OPTIMIZE:-ReleaseFast}"
-GHOSTTY_PATCH_DIR="${GHOSTTY_PATCH_DIR:-${REPO_ROOT}/patches/ghostty/0.1.6}"
+GHOSTTY_PATCH_DIR="${GHOSTTY_PATCH_DIR:-${REPO_ROOT}/patches/ghostty/0.1.6-zig016}"
+ZIG="${ZIG:-zig}"
 SHOULD_FETCH=0
 
 usage() {
@@ -29,6 +31,7 @@ Env:
   GHOSTTY_REF
   GHOSTTY_OPTIMIZE
   GHOSTTY_PATCH_DIR
+  ZIG                 Zig 0.16 executable (default: ${ZIG})
 EOF
 }
 
@@ -131,7 +134,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 require_cmd git
-require_cmd zig
+if [[ "${ZIG}" == */* ]]; then
+  [[ -x "${ZIG}" ]] || { echo "error: Zig executable is not runnable: ${ZIG}" >&2; exit 1; }
+else
+  require_cmd "${ZIG}"
+fi
 
 ensure_checkout
 update_checkout
@@ -139,7 +146,7 @@ apply_patches
 
 (
   cd "${GHOSTTY_DIR}"
-  zig build \
+  "${ZIG}" build \
     -Dapp-runtime=none \
     -Demit-xcframework=true \
     -Demit-macos-app=false \
