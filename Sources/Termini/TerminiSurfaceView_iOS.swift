@@ -106,6 +106,17 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
         CAMetalLayer.self
     }
 
+    private var displayScale: CGFloat {
+        #if os(visionOS)
+        // visionOS has no UIWindow screen scale; UIKit provides the display
+        // scale through the view's traits once the view has been initialized.
+        let scale = traitCollection.displayScale
+        return scale > 0 ? scale : 1.0
+        #else
+        return window?.screen.scale ?? UIScreen.main.scale
+        #endif
+    }
+
     init(runtime: TerminiRuntime) {
         self.runtime = runtime
         // Ghostty expects a non-zero host view so its internal IOSurface layer can size itself.
@@ -117,7 +128,9 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
         // first layout pass; clip it so the terminal never paints over sibling
         // app chrome while synchronizeGhosttyLayerGeometry brings it in sync.
         clipsToBounds = true
+        #if !os(visionOS)
         contentScaleFactor = UIScreen.main.scale
+        #endif
         isMultipleTouchEnabled = true
         addGestureRecognizer(scrollPanGestureRecognizer)
     }
@@ -185,7 +198,7 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
         guard let surface else { return }
 
         let translation = gesture.translation(in: self)
-        let scale = window?.screen.scale ?? UIScreen.main.scale
+        let scale = displayScale
         let precisionMultiplier = 8.0
 
         switch gesture.state {
@@ -306,7 +319,7 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
         cfg.platform = ghostty_platform_u(ios: ghostty_platform_ios_s(
             uiview: Unmanaged.passUnretained(self).toOpaque()
         ))
-        cfg.scale_factor = Double(window?.screen.scale ?? UIScreen.main.scale)
+        cfg.scale_factor = Double(displayScale)
         cfg.font_size = Float(terminalAppearance.fontSize ?? 0)
         cfg.wait_after_command = false
 
@@ -352,7 +365,7 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
 
     private func updateSurfaceSize() {
         guard let surface else { return }
-        let scale = Double(window?.screen.scale ?? UIScreen.main.scale)
+        let scale = Double(displayScale)
         ghostty_surface_set_content_scale(surface, scale, scale)
         let width = UInt32(bounds.width * scale)
         let height = UInt32(bounds.height * scale)
@@ -513,7 +526,7 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
 
     private func synchronizeGhosttyLayerGeometry() {
         let hostBounds = layer.bounds
-        let scale = window?.screen.scale ?? UIScreen.main.scale
+        let scale = displayScale
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
