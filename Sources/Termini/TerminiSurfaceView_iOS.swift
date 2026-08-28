@@ -9,32 +9,37 @@ public struct TerminiSurfaceView: UIViewRepresentable {
     private let controller: TerminiTerminalController?
     private let showsSystemKeyboard: Bool
     private let appearance: TerminiTerminalAppearance
+    private let surfaceBackground: TerminiSurfaceBackground
 
     public init(
         controller: TerminiTerminalController? = nil,
         showsSystemKeyboard: Bool = true,
         appearance: TerminiTerminalAppearance = .default,
-        isRenderVisible: Bool = true   // macOS-only render gate; ignored on iOS
+        isRenderVisible: Bool = true,   // macOS-only render gate; ignored on iOS
+        surfaceBackground: TerminiSurfaceBackground = .terminal
     ) {
         self.controller = controller
         self.showsSystemKeyboard = showsSystemKeyboard
         self.appearance = appearance
+        self.surfaceBackground = surfaceBackground
     }
 
     public init(
         controller: TerminiTerminalController? = nil,
         showsSystemKeyboard: Bool = true,
-        fontSize: Double? = nil
+        fontSize: Double? = nil,
+        surfaceBackground: TerminiSurfaceBackground = .terminal
     ) {
         self.init(
             controller: controller,
             showsSystemKeyboard: showsSystemKeyboard,
-            appearance: .init(fontSize: fontSize)
+            appearance: .init(fontSize: fontSize),
+            surfaceBackground: surfaceBackground
         )
     }
 
     public func makeUIView(context: Context) -> SurfaceContainerView {
-        let view = SurfaceContainerView(runtime: .shared)
+        let view = SurfaceContainerView(runtime: .shared, surfaceBackground: surfaceBackground)
         view.showsSystemKeyboard = showsSystemKeyboard
         view.terminalAppearance = appearance
         view.bind(controller: controller)
@@ -43,6 +48,7 @@ public struct TerminiSurfaceView: UIViewRepresentable {
 
     public func updateUIView(_ uiView: SurfaceContainerView, context: Context) {
         uiView.showsSystemKeyboard = showsSystemKeyboard
+        uiView.surfaceBackground = surfaceBackground
         uiView.terminalAppearance = appearance
         uiView.bind(controller: controller)
     }
@@ -82,6 +88,12 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
     public var smartInsertDeleteType: UITextSmartInsertDeleteType = .no
     public var enablesReturnKeyAutomatically: Bool = false
     private var lastAppliedAppearance: TerminiTerminalAppearance = .default
+    var surfaceBackground: TerminiSurfaceBackground {
+        didSet {
+            guard oldValue != surfaceBackground else { return }
+            updateBackgroundColor()
+        }
+    }
     public var terminalAppearance: TerminiTerminalAppearance = .default {
         didSet {
             guard oldValue != terminalAppearance else { return }
@@ -117,12 +129,15 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
         #endif
     }
 
-    init(runtime: TerminiRuntime) {
+    init(
+        runtime: TerminiRuntime,
+        surfaceBackground: TerminiSurfaceBackground = .terminal
+    ) {
         self.runtime = runtime
+        self.surfaceBackground = surfaceBackground
         // Ghostty expects a non-zero host view so its internal IOSurface layer can size itself.
         super.init(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
         updateBackgroundColor()
-        isOpaque = true
         // Ghostty owns an IOSurfaceLayer below this view. Older known-good
         // GhosttyKit builds can size that layer to the full drawable before our
         // first layout pass; clip it so the terminal never paints over sibling
@@ -460,13 +475,20 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
     }
 
     private func updateBackgroundColor() {
+        let isTerminalBackground = surfaceBackground == .terminal
         let color = terminalAppearance.theme?.background ?? .init(hex: 0x000000)
-        backgroundColor = UIColor(
-            red: CGFloat(color.red) / 255.0,
-            green: CGFloat(color.green) / 255.0,
-            blue: CGFloat(color.blue) / 255.0,
-            alpha: 1.0
-        )
+        let backgroundColor = isTerminalBackground
+            ? UIColor(
+                red: CGFloat(color.red) / 255.0,
+                green: CGFloat(color.green) / 255.0,
+                blue: CGFloat(color.blue) / 255.0,
+                alpha: 1.0
+            )
+            : UIColor.clear
+        self.backgroundColor = backgroundColor
+        isOpaque = isTerminalBackground
+        layer.isOpaque = isTerminalBackground
+        layer.backgroundColor = backgroundColor.cgColor
     }
 
     private var ambientGhosttyColorScheme: ghostty_color_scheme_e {

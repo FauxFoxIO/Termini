@@ -9,6 +9,7 @@ public struct TerminiSurfaceView: NSViewRepresentable {
     private let controller: TerminiTerminalController?
     private let showsSystemKeyboard: Bool
     private let appearance: TerminiTerminalAppearance
+    private let surfaceBackground: TerminiSurfaceBackground
     // hosts that keep several surfaces mounted (warm caches)
     // mark all but the selected one invisible so hidden surfaces stop drawing.
     private let isRenderVisible: Bool
@@ -17,28 +18,32 @@ public struct TerminiSurfaceView: NSViewRepresentable {
         controller: TerminiTerminalController? = nil,
         showsSystemKeyboard: Bool = true,
         appearance: TerminiTerminalAppearance = .default,
-        isRenderVisible: Bool = true
+        isRenderVisible: Bool = true,
+        surfaceBackground: TerminiSurfaceBackground = .terminal
     ) {
         self.controller = controller
         self.showsSystemKeyboard = showsSystemKeyboard
         self.appearance = appearance
         self.isRenderVisible = isRenderVisible
+        self.surfaceBackground = surfaceBackground
     }
 
     public init(
         controller: TerminiTerminalController? = nil,
         showsSystemKeyboard: Bool = true,
-        fontSize: Double? = nil
+        fontSize: Double? = nil,
+        surfaceBackground: TerminiSurfaceBackground = .terminal
     ) {
         self.init(
             controller: controller,
             showsSystemKeyboard: showsSystemKeyboard,
-            appearance: .init(fontSize: fontSize)
+            appearance: .init(fontSize: fontSize),
+            surfaceBackground: surfaceBackground
         )
     }
 
     public func makeNSView(context: Context) -> SurfaceContainerView {
-        let view = SurfaceContainerView(runtime: .shared)
+        let view = SurfaceContainerView(runtime: .shared, surfaceBackground: surfaceBackground)
         view.terminalAppearance = appearance
         view.isRenderVisible = isRenderVisible
         view.bind(controller: controller)
@@ -46,6 +51,7 @@ public struct TerminiSurfaceView: NSViewRepresentable {
     }
 
     public func updateNSView(_ nsView: SurfaceContainerView, context: Context) {
+        nsView.surfaceBackground = surfaceBackground
         nsView.terminalAppearance = appearance
         nsView.isRenderVisible = isRenderVisible
         nsView.bind(controller: controller)
@@ -74,6 +80,12 @@ public final class SurfaceContainerView: NSView {
     private var pendingWinsizeReport: DispatchWorkItem?
     private let liveResizeWinsizeInterval: TimeInterval = 1.0 / 12.0
     private var lastAppliedAppearance: TerminiTerminalAppearance = .default
+    var surfaceBackground: TerminiSurfaceBackground {
+        didSet {
+            guard oldValue != surfaceBackground else { return }
+            updateBackgroundColor()
+        }
+    }
     private let debugInputLogging = ProcessInfo.processInfo.environment["TERMBRIDGEKIT_DEBUG_INPUT"] == "1"
     private var lastMouseLog: TimeInterval = 0
     private let mouseLogInterval: TimeInterval = 0.05
@@ -113,8 +125,12 @@ public final class SurfaceContainerView: NSView {
         }
     }
 
-    init(runtime: TerminiRuntime) {
+    init(
+        runtime: TerminiRuntime,
+        surfaceBackground: TerminiSurfaceBackground = .terminal
+    ) {
         self.runtime = runtime
+        self.surfaceBackground = surfaceBackground
         super.init(frame: .zero)
         wantsLayer = true
         layerContentsRedrawPolicy = .onSetNeedsDisplay
@@ -582,6 +598,12 @@ public final class SurfaceContainerView: NSView {
     }
 
     private func updateBackgroundColor() {
+        guard surfaceBackground == .terminal else {
+            layer?.isOpaque = false
+            layer?.backgroundColor = NSColor.clear.cgColor
+            return
+        }
+
         let color = terminalAppearance.theme?.background ?? .init(hex: 0x000000)
         layer?.backgroundColor = NSColor(
             srgbRed: CGFloat(color.red) / 255.0,
@@ -589,6 +611,11 @@ public final class SurfaceContainerView: NSView {
             blue: CGFloat(color.blue) / 255.0,
             alpha: 1.0
         ).cgColor
+        layer?.isOpaque = true
+    }
+
+    public override var isOpaque: Bool {
+        surfaceBackground == .terminal
     }
 
     private var ambientGhosttyColorScheme: ghostty_color_scheme_e {
