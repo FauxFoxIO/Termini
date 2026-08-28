@@ -14,6 +14,84 @@ struct TerminiScrollDelta: Equatable, Sendable {
     var isZero: Bool { x == 0 && y == 0 }
 }
 
+struct TerminiScrollbarState: Equatable, Sendable {
+    let total: UInt64
+    let offset: UInt64
+    let len: UInt64
+
+    func metrics(
+        boundsHeight: CGFloat,
+        adjustedContentInsetTop: CGFloat,
+        adjustedContentInsetBottom: CGFloat
+    ) -> TerminiScrollbarMetrics {
+        TerminiScrollbarMetrics(
+            state: self,
+            boundsHeight: boundsHeight,
+            adjustedContentInsetTop: adjustedContentInsetTop,
+            adjustedContentInsetBottom: adjustedContentInsetBottom
+        )
+    }
+}
+
+struct TerminiScrollbarMetrics: Equatable, Sendable {
+    let state: TerminiScrollbarState
+    let scrollableLines: CGFloat
+    let pointsPerLine: CGFloat
+    let minY: CGFloat
+    let span: CGFloat
+    let maxY: CGFloat
+    let contentSizeHeight: CGFloat
+    let canonicalY: CGFloat
+
+    var hasRange: Bool { span > 0 }
+
+    init(
+        state: TerminiScrollbarState,
+        boundsHeight: CGFloat,
+        adjustedContentInsetTop: CGFloat,
+        adjustedContentInsetBottom: CGFloat
+    ) {
+        let viewportHeight = max(boundsHeight, 0)
+        let scrollableLineCount = state.total >= state.len
+            ? state.total - state.len
+            : 0
+        let scrollableLines = CGFloat(scrollableLineCount)
+        let pointsPerLine = viewportHeight / max(CGFloat(state.len), 1)
+        let minY = -adjustedContentInsetTop
+        let span = state.len == 0 ? 0 : scrollableLines * pointsPerLine
+        let maxY = minY + span
+        let clampedOffset = state.len == 0
+            ? 0
+            : min(max(CGFloat(state.offset), 0), scrollableLines)
+
+        self.state = state
+        self.scrollableLines = scrollableLines
+        self.pointsPerLine = pointsPerLine
+        self.minY = minY
+        self.span = span
+        self.maxY = maxY
+        self.contentSizeHeight = max(
+            0,
+            viewportHeight + span - adjustedContentInsetTop - adjustedContentInsetBottom
+        )
+        self.canonicalY = minY + clampedOffset * pointsPerLine
+    }
+
+    func clampedY(_ contentOffsetY: CGFloat) -> CGFloat {
+        min(max(contentOffsetY, minY), maxY)
+    }
+
+    func overscrollTranslation(for contentOffsetY: CGFloat) -> CGFloat {
+        if contentOffsetY < minY {
+            return minY - contentOffsetY
+        }
+        if contentOffsetY > maxY {
+            return maxY - contentOffsetY
+        }
+        return 0
+    }
+}
+
 /// Shared scaling and sign rules for raw and native scrolling surfaces.
 enum TerminiScrollTranslator {
     static func appKitDelta(

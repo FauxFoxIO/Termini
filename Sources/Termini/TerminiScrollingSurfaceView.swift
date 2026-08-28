@@ -67,11 +67,14 @@ public struct TerminiScrollingSurfaceView: UIViewRepresentable {
 }
 
 /// Owns UIKit scrolling while keeping Ghostty's grid at the viewport size.
-public final class TerminiScrollingContainerView: UIScrollView, UIScrollViewDelegate {
+public final class TerminiScrollingContainerView: UIScrollView, UIScrollViewDelegate, TerminiSurfaceScrollbarDelegate {
     private let surface: SurfaceContainerView
-    private var suppressOffsetChanges = false
-    private var lastContentOffset: CGPoint = .zero
+    private var scrollbarState: TerminiScrollbarState?
+    private var scrollbarMetrics: TerminiScrollbarMetrics?
+    private var lastForwardedCanonicalY: CGFloat?
+    private var isApplyingGhosttyScrollbar = false
     private var lastAdjustedContentInset: UIEdgeInsets = .zero
+    private var lastBoundsSize: CGSize = .zero
 
     override init(frame: CGRect) {
         surface = SurfaceContainerView(runtime: .shared)
@@ -88,7 +91,7 @@ public final class TerminiScrollingContainerView: UIScrollView, UIScrollViewDele
     private func configureSurface() {
         delegate = self
         isAccessibilityElement = false
-        alwaysBounceHorizontal = true
+        alwaysBounceHorizontal = false
         alwaysBounceVertical = true
         showsHorizontalScrollIndicator = false
         showsVerticalScrollIndicator = false
@@ -97,6 +100,7 @@ public final class TerminiScrollingContainerView: UIScrollView, UIScrollViewDele
         panGestureRecognizer.maximumNumberOfTouches = 3
 
         surface.isNativeScrollHosted = true
+        surface.scrollbarStateDelegate = self
         surface.translatesAutoresizingMaskIntoConstraints = false
         addSubview(surface)
         NSLayoutConstraint.activate([
@@ -116,20 +120,17 @@ public final class TerminiScrollingContainerView: UIScrollView, UIScrollViewDele
 
     public override func layoutSubviews() {
         super.layoutSubviews()
-        // Keep the native host exactly viewport-sized. Ghostty owns scrollback;
-        // this content size only permits UIKit to deliver the pan gesture.
-        contentSize = bounds.size
-        resetContentOffsetIfInsetsChanged()
+        refreshScrollGeometry()
     }
 
     public override func safeAreaInsetsDidChange() {
         super.safeAreaInsetsDidChange()
-        resetContentOffsetIfInsetsChanged()
+        refreshScrollGeometry()
     }
 
     public override func adjustedContentInsetDidChange() {
         super.adjustedContentInsetDidChange()
-        resetContentOffsetIfInsetsChanged()
+        refreshScrollGeometry()
     }
 
     func update(
@@ -142,77 +143,133 @@ public final class TerminiScrollingContainerView: UIScrollView, UIScrollViewDele
         surface.surfaceBackground = surfaceBackground
         surface.terminalAppearance = appearance
         surface.bind(controller: controller)
-        resetContentOffset()
+        refreshScrollGeometry()
     }
 
     public func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        guard !suppressOffsetChanges else { return }
-        guard lastAdjustedContentInset == adjustedContentInset else {
-            resetContentOffset()
+        guard !isApplyingGhosttyScrollbar,
+              let metrics = scrollbarMetrics else {
             return
         }
-        let delta = TerminiScrollTranslator.viewportDelta(
-            from: lastContentOffset,
-            to: scrollView.contentOffset
+
+        let clampedY = metrics.clampedY(scrollView.contentOffset.y)
+        surface.transform = CGAffineTransform(
+            translationX: 0,
+            y: metrics.overscrollTranslation(for: scrollView.contentOffset.y)
         )
-        lastContentOffset = scrollView.contentOffset
-        guard !delta.isZero else { return }
-        surface.forwardNativeScrollDelta(delta)
-        resetContentOffset()
+
+        if let previousY = lastForwardedCanonicalY {
+            let delta = TerminiScrollTranslator.viewportDelta(
+                from: CGPoint(x: 0, y: previousY),
+                to: CGPoint(x: 0, y: clampedY)
+            )
+            if !delta.isZero {
+                surface.forwardNativeScrollDelta(delta)
+            }
+        }
+        lastForwardedCanonicalY = clampedY
     }
 
     public func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
-        lastContentOffset = scrollView.contentOffset
+        if let metrics = scrollbarMetrics {
+            lastForwardedCanonicalY = metrics.clampedY(scrollView.contentOffset.y)
+        }
         surface.becomeFirstResponder()
     }
 
-    public func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-        if !decelerate { resetContentOffset() }
-    }
-
-    public func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
-        resetContentOffset()
-    }
-
-    public func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
-        resetContentOffset()
-    }
-
     public override func accessibilityScroll(_ direction: UIAccessibilityScrollDirection) -> Bool {
-        let viewportWidth = max(bounds.width, 1)
+        guard let metrics = scrollbarMetrics, metrics.hasRange else { return false }
         let viewportHeight = max(bounds.height, 1)
-        let delta: TerminiScrollDelta
+        let targetY: CGFloat
         switch direction {
         case .up:
-            delta = TerminiScrollDelta(x: 0, y: -Double(viewportHeight))
+            targetY = metrics.clampedY(contentOffset.y - viewportHeight)
         case .down:
-            delta = TerminiScrollDelta(x: 0, y: Double(viewportHeight))
-        case .left:
-            delta = TerminiScrollDelta(x: -Double(viewportWidth), y: 0)
-        case .right:
-            delta = TerminiScrollDelta(x: Double(viewportWidth), y: 0)
+            targetY = metrics.clampedY(contentOffset.y + viewportHeight)
+        case .left, .right, .next, .previous:
+            return false
         @unknown default:
             return false
         }
-        surface.forwardNativeScrollDelta(delta)
+        setContentOffset(
+            CGPoint(x: contentOffset.x, y: targetY),
+            animated: true
+        )
         return true
     }
 
-    private func resetContentOffset() {
-        let neutralOffset = TerminiScrollTranslator.neutralContentOffset(
-            topInset: adjustedContentInset.top,
-            leadingInset: adjustedContentInset.left
-        )
-        suppressOffsetChanges = true
-        contentOffset = neutralOffset
-        lastContentOffset = neutralOffset
-        lastAdjustedContentInset = adjustedContentInset
-        suppressOffsetChanges = false
+    private func refreshScrollGeometry() {
+        let inset = adjustedContentInset
+        guard lastAdjustedContentInset != inset
+            || lastBoundsSize != bounds.size
+            || scrollbarMetrics == nil else { return }
+        lastAdjustedContentInset = inset
+        lastBoundsSize = bounds.size
+
+        if let scrollbarState {
+            let metrics = scrollbarState.metrics(
+                boundsHeight: bounds.height,
+                adjustedContentInsetTop: inset.top,
+                adjustedContentInsetBottom: inset.bottom
+            )
+            scrollbarMetrics = metrics
+            contentSize = CGSize(width: bounds.width, height: metrics.contentSizeHeight)
+            lastForwardedCanonicalY = metrics.clampedY(contentOffset.y)
+            surface.transform = CGAffineTransform(
+                translationX: 0,
+                y: metrics.overscrollTranslation(for: contentOffset.y)
+            )
+        } else {
+            // Keep the native host exactly viewport-sized until Ghostty supplies
+            // a scrollbar model. The content size is only a gesture bridge.
+            contentSize = CGSize(
+                width: bounds.width,
+                height: max(0, bounds.height - inset.top - inset.bottom)
+            )
+        }
     }
 
-    private func resetContentOffsetIfInsetsChanged() {
-        guard lastAdjustedContentInset != adjustedContentInset else { return }
-        resetContentOffset()
+    func surface(
+        _ surface: SurfaceContainerView,
+        didReceiveScrollbarState state: TerminiScrollbarState
+    ) {
+        let metrics = state.metrics(
+            boundsHeight: bounds.height,
+            adjustedContentInsetTop: adjustedContentInset.top,
+            adjustedContentInsetBottom: adjustedContentInset.bottom
+        )
+        let oldMetrics = scrollbarMetrics
+        let transientOffsetY = contentOffset.y
+        let transientTransform = surface.transform
+        let isTopOverscroll = oldMetrics.map { transientOffsetY < $0.minY } ?? false
+        let isBottomOverscroll = oldMetrics.map { transientOffsetY > $0.maxY } ?? false
+        let isAtIncomingTop = metrics.canonicalY == metrics.minY
+        let isAtIncomingBottom = metrics.hasRange && metrics.canonicalY == metrics.maxY
+        let preserveTransientOverscroll = (isTopOverscroll && isAtIncomingTop)
+            || (isBottomOverscroll && isAtIncomingBottom)
+
+        isApplyingGhosttyScrollbar = true
+        scrollbarState = state
+        scrollbarMetrics = metrics
+        contentSize = CGSize(width: bounds.width, height: metrics.contentSizeHeight)
+        if preserveTransientOverscroll {
+            contentOffset = CGPoint(x: contentOffset.x, y: transientOffsetY)
+        } else {
+            contentOffset = CGPoint(x: contentOffset.x, y: metrics.canonicalY)
+        }
+        isApplyingGhosttyScrollbar = false
+
+        // A scrollbar action establishes a new canonical baseline. UIKit owns
+        // any retained edge spring and its transient visual translation.
+        lastForwardedCanonicalY = metrics.canonicalY
+        if preserveTransientOverscroll {
+            surface.transform = transientTransform
+        } else {
+            surface.transform = CGAffineTransform(
+                translationX: 0,
+                y: metrics.overscrollTranslation(for: contentOffset.y)
+            )
+        }
     }
 }
 

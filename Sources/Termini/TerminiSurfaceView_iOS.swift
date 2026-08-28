@@ -4,6 +4,13 @@ import SwiftUI
 import UIKit
 import GhosttyKit
 
+protocol TerminiSurfaceScrollbarDelegate: AnyObject {
+    func surface(
+        _ surface: SurfaceContainerView,
+        didReceiveScrollbarState state: TerminiScrollbarState
+    )
+}
+
 /// SwiftUI wrapper that embeds the live Ghostty surface on iOS.
 public struct TerminiSurfaceView: UIViewRepresentable {
     private let controller: TerminiTerminalController?
@@ -66,6 +73,7 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
     private var pendingOutput = Data()
     private var renderLink: CADisplayLink?
     private weak var controller: TerminiTerminalController?
+    weak var scrollbarStateDelegate: (any TerminiSurfaceScrollbarDelegate)?
     private var lastReportedSize: TerminiTerminalSize?
     private lazy var suppressedInputView = UIView(frame: .zero)
     private lazy var scrollPanGestureRecognizer: UIPanGestureRecognizer = {
@@ -173,6 +181,7 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
     deinit {
         renderLink?.invalidate()
         if let surface {
+            runtime.unregisterSurface(surface)
             ghostty_surface_free(surface)
         }
     }
@@ -350,6 +359,7 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
 
         guard let created = ghostty_surface_new(app, &cfg) else { return }
         surface = created
+        runtime.registerSurface(created, view: self)
         // `font_size` is part of the surface creation config, so it is already
         // active in the initial Ghostty font grid. Treat it as applied here to
         // avoid immediately replacing that grid with an identical one. Older
@@ -417,6 +427,17 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
             delta.x,
             delta.y,
             ghostty_input_scroll_mods_t(0b0000_0001)
+        )
+    }
+
+    func receiveGhosttyScrollbar(total: UInt64, offset: UInt64, len: UInt64) {
+        scrollbarStateDelegate?.surface(
+            self,
+            didReceiveScrollbarState: TerminiScrollbarState(
+                total: total,
+                offset: offset,
+                len: len
+            )
         )
     }
 

@@ -19,6 +19,18 @@ final class TerminiRuntime: ObservableObject {
     private var hasPendingWakeupTick = false
     private let debugInputLogging = ProcessInfo.processInfo.environment["TERMBRIDGEKIT_DEBUG_INPUT"] == "1"
 
+    #if canImport(UIKit)
+    private final class WeakSurfaceReference {
+        weak var view: SurfaceContainerView?
+
+        init(view: SurfaceContainerView) {
+            self.view = view
+        }
+    }
+
+    nonisolated(unsafe) private var surfaceViews: [UInt: WeakSurfaceReference] = [:]
+    #endif
+
     private init() {
         #if canImport(AppKit)
         // SPM executables default to `.prohibited`, which blocks keyboard focus.
@@ -142,9 +154,47 @@ final class TerminiRuntime: ObservableObject {
         target: ghostty_target_s,
         action: ghostty_action_s
     ) -> Bool {
-        // For now we acknowledge all actions without special handling.
+        #if canImport(UIKit)
+        guard action.tag == GHOSTTY_ACTION_SCROLLBAR,
+              target.tag == GHOSTTY_TARGET_SURFACE,
+              let surface = target.target.surface,
+              let view = shared.surfaceView(for: surface) else {
+            return true
+        }
+
+        let scrollbar = action.action.scrollbar
+        view.receiveGhosttyScrollbar(
+            total: scrollbar.total,
+            offset: scrollbar.offset,
+            len: scrollbar.len
+        )
+        #endif
         return true
     }
+
+    #if canImport(UIKit)
+    func registerSurface(_ surface: ghostty_surface_t, view: SurfaceContainerView) {
+        surfaceViews[Self.surfaceKey(surface)] = WeakSurfaceReference(view: view)
+    }
+
+    nonisolated func unregisterSurface(_ surface: ghostty_surface_t) {
+        surfaceViews.removeValue(forKey: Self.surfaceKey(surface))
+    }
+
+    private func surfaceView(for surface: ghostty_surface_t) -> SurfaceContainerView? {
+        let key = Self.surfaceKey(surface)
+        guard let reference = surfaceViews[key] else { return nil }
+        guard let view = reference.view else {
+            surfaceViews.removeValue(forKey: key)
+            return nil
+        }
+        return view
+    }
+
+    nonisolated private static func surfaceKey(_ surface: ghostty_surface_t) -> UInt {
+        UInt(bitPattern: surface)
+    }
+    #endif
 
     private static func surfaceView(
         from userdata: UnsafeMutableRawPointer?
