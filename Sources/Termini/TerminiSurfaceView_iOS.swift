@@ -78,6 +78,14 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
         recognizer.delegate = self
         return recognizer
     }()
+    /// Native scrolling containers own the pan recognizer so UIKit can participate in
+    /// safe-area scrolling without competing with this surface's two-finger translator.
+    var isNativeScrollHosted = false {
+        didSet {
+            guard oldValue != isNativeScrollHosted else { return }
+            scrollPanGestureRecognizer.isEnabled = !isNativeScrollHosted
+        }
+    }
 
     public var keyboardType: UIKeyboardType = .asciiCapable
     public var autocorrectionType: UITextAutocorrectionType = .no
@@ -192,6 +200,7 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
     public override func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()
         setSurfaceFocus(true)
+        controller?.reportFocusChanged(true)
         runtime.keyboardDidChange()
         return ok
     }
@@ -200,6 +209,7 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
     public override func resignFirstResponder() -> Bool {
         let ok = super.resignFirstResponder()
         setSurfaceFocus(false)
+        controller?.reportFocusChanged(false)
         return ok
     }
 
@@ -214,7 +224,6 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
 
         let translation = gesture.translation(in: self)
         let scale = displayScale
-        let precisionMultiplier = 8.0
 
         switch gesture.state {
         case .began:
@@ -222,18 +231,13 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
             gesture.setTranslation(.zero, in: self)
 
         case .changed:
-            // UIPanGestureRecognizer reports movement in points. Ghostty expects
-            // precision scroll input in pixels, so convert using the display scale.
-            let deltaX = translation.x * scale * precisionMultiplier
-            let deltaY = translation.y * scale * precisionMultiplier
-            guard abs(deltaX) > 0 || abs(deltaY) > 0 else { return }
-
-            ghostty_surface_mouse_scroll(
-                surface,
-                Double(deltaX),
-                Double(deltaY),
-                ghostty_input_scroll_mods_t(0b0000_0001)
+            let delta = TerminiScrollTranslator.iOSPanDelta(
+                translationX: translation.x,
+                translationY: translation.y,
+                scale: scale
             )
+            guard !delta.isZero else { return }
+            forwardNativeScrollDelta(delta, surface: surface)
             gesture.setTranslation(.zero, in: self)
 
         case .ended, .cancelled, .failed:
@@ -300,6 +304,12 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
     }
 
     func bind(controller: TerminiTerminalController?) {
+        if let current = self.controller, let controller, current === controller {
+            return
+        }
+        if self.controller == nil, controller == nil {
+            return
+        }
         self.controller = controller
         controller?.bind(
             processRemoteOutput: { [weak self] data in
@@ -398,6 +408,16 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
 
     func handleTransportWrite(_ data: Data) {
         controller?.forwardTransportWrite(data)
+    }
+
+    func forwardNativeScrollDelta(_ delta: TerminiScrollDelta, surface: ghostty_surface_t? = nil) {
+        guard let surface = surface ?? self.surface, !delta.isZero else { return }
+        ghostty_surface_mouse_scroll(
+            surface,
+            delta.x,
+            delta.y,
+            ghostty_input_scroll_mods_t(0b0000_0001)
+        )
     }
 
     private func sendText(_ text: String) {

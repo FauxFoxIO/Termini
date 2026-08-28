@@ -211,6 +211,7 @@ public final class SurfaceContainerView: NSView {
     public override func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()
         setSurfaceFocus(true)
+        controller?.reportFocusChanged(true)
         requestActiveRenderBurst(duration: 0.75)
         logInput("became first responder: \(ok)")
         return ok
@@ -219,6 +220,7 @@ public final class SurfaceContainerView: NSView {
     public override func resignFirstResponder() -> Bool {
         let ok = super.resignFirstResponder()
         setSurfaceFocus(false)
+        controller?.reportFocusChanged(false)
         stopRenderLoop()
         logInput("resigned first responder: \(ok)")
         return ok
@@ -486,6 +488,12 @@ public final class SurfaceContainerView: NSView {
     }
 
     func bind(controller: TerminiTerminalController?) {
+        if let current = self.controller, let controller, current === controller {
+            return
+        }
+        if self.controller == nil, controller == nil {
+            return
+        }
         self.controller = controller
         controller?.bind(
             processRemoteOutput: { [weak self] data in
@@ -863,14 +871,12 @@ public final class SurfaceContainerView: NSView {
     // multiplier), discrete wheel ticks pass through unscaled, and the
     // momentum phase is forwarded so inertial scrolling behaves.
     public override func scrollWheel(with event: NSEvent) {
+        forwardScrollWheelEvent(event)
+    }
+
+    func forwardScrollWheelEvent(_ event: NSEvent) {
         guard let surface else { return }
-        var x = event.scrollingDeltaX
-        var y = event.scrollingDeltaY
         let precision = event.hasPreciseScrollingDeltas
-        if precision {
-            x *= 2
-            y *= 2
-        }
         let momentum: ghostty_input_mouse_momentum_e
         switch event.momentumPhase {
         case .began: momentum = GHOSTTY_MOUSE_MOMENTUM_BEGAN
@@ -881,12 +887,31 @@ public final class SurfaceContainerView: NSView {
         case .mayBegin: momentum = GHOSTTY_MOUSE_MOMENTUM_MAY_BEGIN
         default: momentum = GHOSTTY_MOUSE_MOMENTUM_NONE
         }
+        forwardNativeScrollEvent(
+            delta: TerminiScrollTranslator.appKitDelta(
+                scrollingDeltaX: event.scrollingDeltaX,
+                scrollingDeltaY: event.scrollingDeltaY,
+                hasPreciseDeltas: precision
+            ),
+            precision: precision,
+            momentum: momentum,
+            surface: surface
+        )
+        requestActiveRenderBurst(duration: 0.35)
+        logInput("scroll dx=\(event.scrollingDeltaX) dy=\(event.scrollingDeltaY) precision=\(precision) momentum=\(momentum.rawValue)")
+    }
+
+    func forwardNativeScrollEvent(
+        delta: TerminiScrollDelta,
+        precision: Bool,
+        momentum: ghostty_input_mouse_momentum_e = GHOSTTY_MOUSE_MOMENTUM_NONE,
+        surface: ghostty_surface_t? = nil
+    ) {
+        guard let surface = surface ?? self.surface, !delta.isZero else { return }
         let scrollMods = ghostty_input_scroll_mods_t(
             (precision ? 1 : 0) | (Int32(momentum.rawValue) << 1)
         )
-        ghostty_surface_mouse_scroll(surface, x, y, scrollMods)
-        requestActiveRenderBurst(duration: 0.35)
-        logInput("scroll dx=\(x) dy=\(y) precision=\(precision) momentum=\(momentum.rawValue)")
+        ghostty_surface_mouse_scroll(surface, delta.x, delta.y, scrollMods)
     }
 
     private func sendMouse(_ event: NSEvent, state: ghostty_input_mouse_state_e) {

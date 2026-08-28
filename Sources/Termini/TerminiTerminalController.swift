@@ -48,6 +48,9 @@ public final class TerminiTerminalController {
     public var onInputText: ((String) -> Void)?
     public var onDeleteBackward: (() -> Void)?
     public var onTransportWrite: ((Data) -> Void)?
+    /// Called by the native surface when it becomes or resigns first responder.
+    /// Keeping this callback on the controller avoids rebuilding SwiftUI closures on every update.
+    public var onFocusChange: ((Bool) -> Void)?
 
     public var onSizeChange: ((TerminiTerminalSize) -> Void)? {
         didSet {
@@ -79,6 +82,10 @@ public final class TerminiTerminalController {
 
     public func blur() {
         blurImpl?()
+    }
+
+    func reportFocusChanged(_ focused: Bool) {
+        onFocusChange?(focused)
     }
 
     public func currentSize() -> TerminiTerminalSize? {
