@@ -16,36 +16,42 @@ public struct TerminiScrollingSurfaceView: UIViewRepresentable {
     private let controller: TerminiTerminalController?
     private let showsSystemKeyboard: Bool
     private let appearance: TerminiTerminalAppearance
+    private let surfaceBackground: TerminiSurfaceBackground
 
     public init(
         controller: TerminiTerminalController? = nil,
         showsSystemKeyboard: Bool = true,
         appearance: TerminiTerminalAppearance = .default,
-        isRenderVisible: Bool = true // macOS-only render gate; ignored on iOS
+        isRenderVisible: Bool = true, // macOS-only render gate; ignored on iOS
+        surfaceBackground: TerminiSurfaceBackground = .terminal
     ) {
         self.controller = controller
         self.showsSystemKeyboard = showsSystemKeyboard
         self.appearance = appearance
+        self.surfaceBackground = surfaceBackground
     }
 
     public init(
         controller: TerminiTerminalController? = nil,
         showsSystemKeyboard: Bool = true,
-        fontSize: Double? = nil
+        fontSize: Double? = nil,
+        surfaceBackground: TerminiSurfaceBackground = .terminal
     ) {
         self.init(
             controller: controller,
             showsSystemKeyboard: showsSystemKeyboard,
-            appearance: .init(fontSize: fontSize)
+            appearance: .init(fontSize: fontSize),
+            surfaceBackground: surfaceBackground
         )
     }
 
     public func makeUIView(context: Context) -> TerminiScrollingContainerView {
-        let view = TerminiScrollingContainerView()
+        let view = TerminiScrollingContainerView(surfaceBackground: surfaceBackground)
         view.update(
             controller: controller,
             showsSystemKeyboard: showsSystemKeyboard,
-            appearance: appearance
+            appearance: appearance,
+            surfaceBackground: surfaceBackground
         )
         return view
     }
@@ -54,20 +60,32 @@ public struct TerminiScrollingSurfaceView: UIViewRepresentable {
         uiView.update(
             controller: controller,
             showsSystemKeyboard: showsSystemKeyboard,
-            appearance: appearance
+            appearance: appearance,
+            surfaceBackground: surfaceBackground
         )
     }
 }
 
 /// Owns UIKit scrolling while keeping Ghostty's grid at the viewport size.
 public final class TerminiScrollingContainerView: UIScrollView, UIScrollViewDelegate {
-    private let surface = SurfaceContainerView(runtime: .shared)
+    private let surface: SurfaceContainerView
     private var suppressOffsetChanges = false
     private var lastContentOffset: CGPoint = .zero
     private var lastAdjustedContentInset: UIEdgeInsets = .zero
 
     override init(frame: CGRect) {
+        surface = SurfaceContainerView(runtime: .shared)
         super.init(frame: frame)
+        configureSurface()
+    }
+
+    init(surfaceBackground: TerminiSurfaceBackground) {
+        surface = SurfaceContainerView(runtime: .shared, surfaceBackground: surfaceBackground)
+        super.init(frame: .zero)
+        configureSurface()
+    }
+
+    private func configureSurface() {
         delegate = self
         isAccessibilityElement = false
         alwaysBounceHorizontal = true
@@ -117,9 +135,11 @@ public final class TerminiScrollingContainerView: UIScrollView, UIScrollViewDele
     func update(
         controller: TerminiTerminalController?,
         showsSystemKeyboard: Bool,
-        appearance: TerminiTerminalAppearance
+        appearance: TerminiTerminalAppearance,
+        surfaceBackground: TerminiSurfaceBackground
     ) {
         surface.showsSystemKeyboard = showsSystemKeyboard
+        surface.surfaceBackground = surfaceBackground
         surface.terminalAppearance = appearance
         surface.bind(controller: controller)
         resetContentOffset()
@@ -206,37 +226,43 @@ public struct TerminiScrollingSurfaceView: NSViewRepresentable {
     private let showsSystemKeyboard: Bool
     private let appearance: TerminiTerminalAppearance
     private let isRenderVisible: Bool
+    private let surfaceBackground: TerminiSurfaceBackground
 
     public init(
         controller: TerminiTerminalController? = nil,
         showsSystemKeyboard: Bool = true,
         appearance: TerminiTerminalAppearance = .default,
-        isRenderVisible: Bool = true
+        isRenderVisible: Bool = true,
+        surfaceBackground: TerminiSurfaceBackground = .terminal
     ) {
         self.controller = controller
         self.showsSystemKeyboard = showsSystemKeyboard
         self.appearance = appearance
         self.isRenderVisible = isRenderVisible
+        self.surfaceBackground = surfaceBackground
     }
 
     public init(
         controller: TerminiTerminalController? = nil,
         showsSystemKeyboard: Bool = true,
-        fontSize: Double? = nil
+        fontSize: Double? = nil,
+        surfaceBackground: TerminiSurfaceBackground = .terminal
     ) {
         self.init(
             controller: controller,
             showsSystemKeyboard: showsSystemKeyboard,
-            appearance: .init(fontSize: fontSize)
+            appearance: .init(fontSize: fontSize),
+            surfaceBackground: surfaceBackground
         )
     }
 
     public func makeNSView(context: Context) -> TerminiScrollingContainerView {
-        let view = TerminiScrollingContainerView()
+        let view = TerminiScrollingContainerView(surfaceBackground: surfaceBackground)
         view.update(
             controller: controller,
             appearance: appearance,
-            isRenderVisible: isRenderVisible
+            isRenderVisible: isRenderVisible,
+            surfaceBackground: surfaceBackground
         )
         return view
     }
@@ -245,17 +271,29 @@ public struct TerminiScrollingSurfaceView: NSViewRepresentable {
         nsView.update(
             controller: controller,
             appearance: appearance,
-            isRenderVisible: isRenderVisible
+            isRenderVisible: isRenderVisible,
+            surfaceBackground: surfaceBackground
         )
     }
 }
 
 /// Keeps AppKit's native wheel event and Ghostty surface in one fixed viewport.
 public final class TerminiScrollingContainerView: NSScrollView {
-    private let surface = SurfaceContainerView(runtime: .shared)
+    private let surface: SurfaceContainerView
 
     override init(frame frameRect: NSRect) {
+        surface = SurfaceContainerView(runtime: .shared)
         super.init(frame: frameRect)
+        configureSurface()
+    }
+
+    init(surfaceBackground: TerminiSurfaceBackground) {
+        surface = SurfaceContainerView(runtime: .shared, surfaceBackground: surfaceBackground)
+        super.init(frame: .zero)
+        configureSurface()
+    }
+
+    private func configureSurface() {
         drawsBackground = false
         hasVerticalScroller = false
         hasHorizontalScroller = false
@@ -273,8 +311,10 @@ public final class TerminiScrollingContainerView: NSScrollView {
     func update(
         controller: TerminiTerminalController?,
         appearance: TerminiTerminalAppearance,
-        isRenderVisible: Bool
+        isRenderVisible: Bool,
+        surfaceBackground: TerminiSurfaceBackground
     ) {
+        surface.surfaceBackground = surfaceBackground
         surface.terminalAppearance = appearance
         surface.isRenderVisible = isRenderVisible
         surface.bind(controller: controller)

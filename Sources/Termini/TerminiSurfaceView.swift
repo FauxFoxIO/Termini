@@ -577,11 +577,14 @@ public final class SurfaceContainerView: NSView {
 
         let fontSizeChanged = lastAppliedAppearance.fontSize != terminalAppearance.fontSize
         let fontFamilyChanged = lastAppliedAppearance.fontFamily != terminalAppearance.fontFamily
-        let shouldApplyFontConfig = fontSizeChanged
+        let extraConfigFilePathsChanged = lastAppliedAppearance.extraConfigFilePaths
+            != terminalAppearance.extraConfigFilePaths
+        let shouldApplySurfaceConfig = fontSizeChanged
             || fontFamilyChanged
+            || extraConfigFilePathsChanged
             || (force && terminalAppearance.hasRuntimeFontOverride)
 
-        if shouldApplyFontConfig {
+        if shouldApplySurfaceConfig {
             guard let config = runtime.makeSurfaceConfig(for: terminalAppearance) else {
                 canCommitAppearanceState = false
                 return
