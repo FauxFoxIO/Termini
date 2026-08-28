@@ -16,18 +16,16 @@ public struct TerminiScrollingSurfaceView: UIViewRepresentable {
     private let controller: TerminiTerminalController?
     private let showsSystemKeyboard: Bool
     private let appearance: TerminiTerminalAppearance
-    private let isRenderVisible: Bool
 
     public init(
         controller: TerminiTerminalController? = nil,
         showsSystemKeyboard: Bool = true,
         appearance: TerminiTerminalAppearance = .default,
-        isRenderVisible: Bool = true
+        isRenderVisible: Bool = true // macOS-only render gate; ignored on iOS
     ) {
         self.controller = controller
         self.showsSystemKeyboard = showsSystemKeyboard
         self.appearance = appearance
-        self.isRenderVisible = isRenderVisible
     }
 
     public init(
@@ -47,8 +45,7 @@ public struct TerminiScrollingSurfaceView: UIViewRepresentable {
         view.update(
             controller: controller,
             showsSystemKeyboard: showsSystemKeyboard,
-            appearance: appearance,
-            isRenderVisible: isRenderVisible
+            appearance: appearance
         )
         return view
     }
@@ -57,8 +54,7 @@ public struct TerminiScrollingSurfaceView: UIViewRepresentable {
         uiView.update(
             controller: controller,
             showsSystemKeyboard: showsSystemKeyboard,
-            appearance: appearance,
-            isRenderVisible: isRenderVisible
+            appearance: appearance
         )
     }
 }
@@ -121,12 +117,10 @@ public final class TerminiScrollingContainerView: UIScrollView, UIScrollViewDele
     func update(
         controller: TerminiTerminalController?,
         showsSystemKeyboard: Bool,
-        appearance: TerminiTerminalAppearance,
-        isRenderVisible: Bool
+        appearance: TerminiTerminalAppearance
     ) {
         surface.showsSystemKeyboard = showsSystemKeyboard
         surface.terminalAppearance = appearance
-        surface.isRenderVisible = isRenderVisible
         surface.bind(controller: controller)
         resetContentOffset()
     }
