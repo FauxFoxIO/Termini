@@ -154,21 +154,50 @@ final class TerminiRuntime: ObservableObject {
         target: ghostty_target_s,
         action: ghostty_action_s
     ) -> Bool {
-        #if canImport(UIKit)
-        guard action.tag == GHOSTTY_ACTION_SCROLLBAR,
-              target.tag == GHOSTTY_TARGET_SURFACE,
-              let surface = target.target.surface,
-              let view = shared.surfaceView(for: surface) else {
+#if canImport(UIKit)
+        if action.tag == GHOSTTY_ACTION_SCROLLBAR,
+           target.tag == GHOSTTY_TARGET_SURFACE,
+           let surface = target.target.surface,
+           let view = shared.surfaceView(for: surface) {
+            let scrollbar = action.action.scrollbar
+            view.receiveGhosttyScrollbar(
+                total: scrollbar.total,
+                offset: scrollbar.offset,
+                len: scrollbar.len
+            )
             return true
         }
-
-        let scrollbar = action.action.scrollbar
-        view.receiveGhosttyScrollbar(
-            total: scrollbar.total,
-            offset: scrollbar.offset,
-            len: scrollbar.len
-        )
-        #endif
+#endif
+        guard target.tag == GHOSTTY_TARGET_SURFACE,
+              let surface = target.target.surface,
+              let userdata = ghostty_surface_userdata(surface),
+              let view = surfaceView(from: userdata) else {
+            return true
+        }
+        switch action.tag {
+        case GHOSTTY_ACTION_START_SEARCH:
+            guard let needle = action.action.start_search.needle else { return true }
+            let query = String(cString: needle)
+            Task { @MainActor in
+                view.reportFindStarted(query)
+            }
+        case GHOSTTY_ACTION_END_SEARCH:
+            Task { @MainActor in
+                view.reportFindEnded()
+            }
+        case GHOSTTY_ACTION_SEARCH_TOTAL:
+            let total = action.action.search_total.total
+            Task { @MainActor in
+                view.reportFindTotal(total >= 0 ? Int(total) : nil)
+            }
+        case GHOSTTY_ACTION_SEARCH_SELECTED:
+            let selected = action.action.search_selected.selected
+            Task { @MainActor in
+                view.reportFindSelected(selected >= 0 ? Int(selected) : nil)
+            }
+        default:
+            break
+        }
         return true
     }
 

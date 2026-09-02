@@ -40,6 +40,37 @@ final class TerminiTerminalAppearanceTests: XCTestCase {
         }
     }
 
+    func testSystemColorStyleIsCodable() throws {
+        let appearance = TerminiTerminalAppearance(colorStyle: .system, fontSize: 17)
+        let data = try JSONEncoder().encode(appearance)
+        let decoded = try JSONDecoder().decode(TerminiTerminalAppearance.self, from: data)
+
+        XCTAssertEqual(decoded.colorStyle, .system)
+        XCTAssertEqual(decoded.fontSize, 17)
+        XCTAssertNil(decoded.theme)
+    }
+
+    func testThemeInitializerMapsToFixedColorStyle() {
+        let appearance = TerminiTerminalAppearance(theme: .midnightBloom)
+
+        XCTAssertEqual(appearance.colorStyle, .theme(.midnightBloom))
+        XCTAssertEqual(appearance.theme, .midnightBloom)
+    }
+
+    func testLegacyThemePayloadStillDecodes() throws {
+        struct LegacyAppearance: Encodable {
+            let theme = TerminiTerminalTheme.paperLantern
+            let fontSize: Double? = nil
+            let fontFamily: TerminiTerminalFontFamily? = nil
+            let extraConfigFilePaths: [String] = []
+        }
+
+        let data = try JSONEncoder().encode(LegacyAppearance())
+        let decoded = try JSONDecoder().decode(TerminiTerminalAppearance.self, from: data)
+
+        XCTAssertEqual(decoded.colorStyle, .theme(.paperLantern))
+    }
+
     func testApplyEscapeSequenceIncludesCoreDynamicColorsAndAnsiPalette() {
         let theme = TerminiTerminalTheme.midnightBloom
         let sequence = theme.applyEscapeSequence

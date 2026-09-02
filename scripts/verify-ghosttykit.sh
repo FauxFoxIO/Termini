@@ -118,6 +118,47 @@ done
 
 for library in "${XCFRAMEWORK_PATH}"/*/*.a; do
   [[ -f "${library}" ]] || continue
+
+  # Keep the audit scoped to identifiers emitted by Sentry, Breakpad, or
+  # Crashpad. In particular, do not reject ordinary prose or C++ names such
+  # as std::...::sentry or dev-sentry.
+  symbols="$(nm -a "${library}")"
+  if symbol_evidence="$(grep -Eim 5 '(^|[[:space:]])_?(sentry_[[:alnum:]_]+|google_breakpad|breakpad|crashpad)([[:space:]]|$)' <<< "${symbols}")"; then
+    echo "error: ${library} contains forbidden Sentry/Breakpad/Crashpad symbol evidence:" >&2
+    echo "${symbol_evidence}" >&2
+    exit 1
+  fi
+
+  member_pattern='(^|/)(sentry([._-][[:alnum:]_.-]+)?|breakpad([._-][[:alnum:]_.-]+)?|crashpad([._-][[:alnum:]_.-]+)?|google_breakpad([._-][[:alnum:]_.-]+)?)$'
+  audit_members() {
+    local archive="$1"
+    local members
+    members="$(ar -t "${archive}")"
+    if member_evidence="$(grep -Eim 5 "${member_pattern}" <<< "${members}")"; then
+      echo "error: ${library} contains forbidden Sentry/Breakpad/Crashpad archive member evidence:" >&2
+      echo "${member_evidence}" >&2
+      exit 1
+    fi
+  }
+  if ! members="$(ar -t "${library}" 2>/dev/null)"; then
+    member_tmp_dir="$(mktemp -d /tmp/termini-ghosttykit-audit.XXXXXX)"
+    for architecture in $(lipo -archs "${library}"); do
+      member_tmp="${member_tmp_dir}/${architecture}.a"
+      lipo -thin "${architecture}" "${library}" -output "${member_tmp}"
+      audit_members "${member_tmp}"
+    done
+    rm -rf "${member_tmp_dir}"
+  else
+    audit_members "${library}"
+  fi
+
+  embedded="$(strings -a "${library}")"
+  if string_evidence="$(grep -Eim 10 '(^|[[:space:]"'"'"'=:/])(_?sentry-init|_?sentry_[[:alnum:]_]+|sentry-(native|sdk)|google_breakpad|breakpad[-_./][[:alnum:]_.-]+|crashpad[-_./][[:alnum:]_.-]+)([^[:alnum:]_]|$)' <<< "${embedded}")"; then
+    echo "error: ${library} contains forbidden Sentry/Breakpad/Crashpad embedded identifier evidence:" >&2
+    echo "${string_evidence}" >&2
+    exit 1
+  fi
+
   exported_symbols="$(nm -gU "${library}")"
   for api in "${required_apis[@]}"; do
     if ! /usr/bin/grep -Eq "[[:space:]]_${api}$" <<< "${exported_symbols}"; then

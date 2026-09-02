@@ -1,4 +1,9 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 /// SwiftUI wrapper for the live Ghostty surface.
 public struct TerminiTerminalView: View {
@@ -51,6 +56,14 @@ public struct TerminiTerminalView: View {
     private var terminalBackground: Color {
         guard surfaceBackground == .terminal else {
             return .clear
+        }
+
+        if appearance.colorStyle == .system {
+            #if canImport(UIKit)
+            return Color(uiColor: .systemBackground)
+            #elseif canImport(AppKit)
+            return Color(nsColor: .windowBackgroundColor)
+            #endif
         }
 
         guard let theme = appearance.theme else {

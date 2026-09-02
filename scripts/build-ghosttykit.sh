@@ -146,6 +146,7 @@ apply_patches
 
 (
   cd "${GHOSTTY_DIR}"
+  # Embedded libraries must not install a process-wide crash handler; the host owns that policy.
   "${ZIG}" build \
     -Dapp-runtime=none \
     -Demit-xcframework=true \

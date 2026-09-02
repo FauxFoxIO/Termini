@@ -4,6 +4,48 @@ import SwiftUI
 import UIKit
 import GhosttyKit
 
+private func ghosttyMods(from modifiers: TerminiHardwareKeyModifiers) -> ghostty_input_mods_e {
+    var raw = GHOSTTY_MODS_NONE.rawValue
+    if modifiers.contains(.shift) { raw |= GHOSTTY_MODS_SHIFT.rawValue }
+    if modifiers.contains(.control) { raw |= GHOSTTY_MODS_CTRL.rawValue }
+    if modifiers.contains(.alternate) { raw |= GHOSTTY_MODS_ALT.rawValue }
+    if modifiers.contains(.command) { raw |= GHOSTTY_MODS_SUPER.rawValue }
+    if modifiers.contains(.capsLock) { raw |= GHOSTTY_MODS_CAPS.rawValue }
+    if modifiers.contains(.numericPad) { raw |= GHOSTTY_MODS_NUM.rawValue }
+    return ghostty_input_mods_e(rawValue: raw)
+}
+
+private func sendHardwareKey(
+    surface: ghostty_surface_t,
+    descriptor: TerminiHardwareKeyDescriptor,
+    action: ghostty_input_action_e
+) {
+    let mods = ghosttyMods(from: descriptor.modifiers)
+    let translatedMods = ghostty_surface_key_translation_mods(surface, mods)
+    var consumedModsRaw = translatedMods.rawValue
+    consumedModsRaw &= ~GHOSTTY_MODS_CTRL.rawValue
+    consumedModsRaw &= ~GHOSTTY_MODS_SUPER.rawValue
+    let consumedMods = ghostty_input_mods_e(rawValue: consumedModsRaw)
+    var keyEvent = ghostty_input_key_s(
+        action: action,
+        mods: mods,
+        consumed_mods: consumedMods,
+        keycode: UInt32(descriptor.keyCode),
+        text: nil,
+        unshifted_codepoint: descriptor.unshiftedCodepoint,
+        composing: false
+    )
+
+    if let text = descriptor.text {
+        text.utf8CString.withUnsafeBufferPointer { buffer in
+            keyEvent.text = buffer.baseAddress
+            ghostty_surface_key(surface, keyEvent)
+        }
+    } else {
+        ghostty_surface_key(surface, keyEvent)
+    }
+}
+
 protocol TerminiSurfaceScrollbarDelegate: AnyObject {
     func surface(
         _ surface: SurfaceContainerView,
@@ -22,7 +64,7 @@ public struct TerminiSurfaceView: UIViewRepresentable {
         controller: TerminiTerminalController? = nil,
         showsSystemKeyboard: Bool = true,
         appearance: TerminiTerminalAppearance = .default,
-        isRenderVisible: Bool = true,   // macOS-only render gate; ignored on iOS
+        isRenderVisible: Bool = true,
         surfaceBackground: TerminiSurfaceBackground = .terminal
     ) {
         self.controller = controller
@@ -45,8 +87,27 @@ public struct TerminiSurfaceView: UIViewRepresentable {
         )
     }
 
+    public final class Coordinator {
+        fileprivate weak var controller: TerminiTerminalController?
+        fileprivate weak var host: AnyObject?
+        fileprivate var token: UInt64?
+    }
+
+    public func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
     public func makeUIView(context: Context) -> SurfaceContainerView {
-        let view = SurfaceContainerView(runtime: .shared, surfaceBackground: surfaceBackground)
+        let view: SurfaceContainerView
+        if let controller {
+            let attachment = controller.attachToHost(context.coordinator)
+            view = attachment.surface
+            context.coordinator.controller = controller
+            context.coordinator.host = context.coordinator
+            context.coordinator.token = attachment.token
+        } else {
+            view = SurfaceContainerView(runtime: .shared, surfaceBackground: surfaceBackground)
+        }
         view.showsSystemKeyboard = showsSystemKeyboard
         view.terminalAppearance = appearance
         view.bind(controller: controller)
@@ -54,10 +115,30 @@ public struct TerminiSurfaceView: UIViewRepresentable {
     }
 
     public func updateUIView(_ uiView: SurfaceContainerView, context: Context) {
+        if let current = context.coordinator.controller, current !== controller {
+            if let token = context.coordinator.token, let host = context.coordinator.host {
+                current.detachIfCurrent(token, host: host)
+            }
+            context.coordinator.token = nil
+            context.coordinator.controller = nil
+        }
+        if let controller, context.coordinator.controller == nil {
+            let attachment = controller.attachToHost(context.coordinator)
+            context.coordinator.controller = controller
+            context.coordinator.host = context.coordinator
+            context.coordinator.token = attachment.token
+        }
         uiView.showsSystemKeyboard = showsSystemKeyboard
         uiView.surfaceBackground = surfaceBackground
         uiView.terminalAppearance = appearance
         uiView.bind(controller: controller)
+    }
+
+    public static func dismantleUIView(_ uiView: SurfaceContainerView, coordinator: Coordinator) {
+        if let token = coordinator.token, let controller = coordinator.controller,
+           let host = coordinator.host {
+            controller.detachIfCurrent(token, host: host)
+        }
     }
 }
 
@@ -70,9 +151,14 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
     /// which blocks the main thread on an un-ticked surface (the tick that drains
     /// it also runs on the main thread).
     private var surfaceIOReady = false
+    private var restoredInitialSnapshot = false
     private var pendingOutput = Data()
     private var renderLink: CADisplayLink?
     private weak var controller: TerminiTerminalController?
+    private var isHostAttached = true
+    private var inputEnabled = true
+    private let repeatCoordinator = TerminiHardwareKeyRepeatCoordinator()
+    private var forwardedKeys: [UInt16: TerminiHardwareKeyDescriptor] = [:]
     weak var scrollbarStateDelegate: (any TerminiSurfaceScrollbarDelegate)?
     private var lastReportedSize: TerminiTerminalSize?
     private lazy var suppressedInputView = UIView(frame: .zero)
@@ -179,6 +265,7 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
     }
 
     deinit {
+        releaseForwardedKeys()
         renderLink?.invalidate()
         if let surface {
             runtime.unregisterSurface(surface)
@@ -188,12 +275,29 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
 
     public override func didMoveToWindow() {
         super.didMoveToWindow()
+        if window == nil {
+            isHostAttached = false
+            releaseForwardedKeys()
+            setSurfaceFocus(false)
+            if let surface {
+                ghostty_surface_set_occlusion(surface, false)
+            }
+            renderLink?.invalidate()
+            renderLink = nil
+            return
+        }
+        isHostAttached = true
         createSurfaceIfNeeded()
         synchronizeGhosttyLayerGeometry()
         updateSurfaceSize()
         startRenderLoopIfNeeded()
-        Task { @MainActor in
-            _ = self.becomeFirstResponder()
+        if controller == nil {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                _ = self.becomeFirstResponder()
+            }
+        } else {
+            restoreFocusIfNeeded()
         }
     }
 
@@ -207,6 +311,7 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
 
     @discardableResult
     public override func becomeFirstResponder() -> Bool {
+        guard inputEnabled else { return false }
         let ok = super.becomeFirstResponder()
         setSurfaceFocus(true)
         controller?.reportFocusChanged(true)
@@ -217,19 +322,83 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
     @discardableResult
     public override func resignFirstResponder() -> Bool {
         let ok = super.resignFirstResponder()
+        releaseForwardedKeys()
         setSurfaceFocus(false)
         controller?.reportFocusChanged(false)
         return ok
     }
 
+    func setInputEnabled(_ enabled: Bool) {
+        inputEnabled = enabled
+        if !enabled {
+            releaseForwardedKeys()
+            _ = resignFirstResponder()
+            setSurfaceFocus(false)
+        }
+    }
+
+    func prepareForHostAttachment() {
+        isHostAttached = true
+        if let surface {
+            ghostty_surface_set_occlusion(surface, window != nil)
+        }
+        if window != nil {
+            createSurfaceIfNeeded()
+            synchronizeGhosttyLayerGeometry()
+            updateSurfaceSize()
+            startRenderLoopIfNeeded()
+            restoreFocusIfNeeded()
+        }
+    }
+
+    func detachFromHost() {
+        isHostAttached = false
+        releaseForwardedKeys()
+        if let surface {
+            ghostty_surface_set_occlusion(surface, false)
+        }
+        setSurfaceFocus(false)
+        if isFirstResponder {
+            _ = resignFirstResponder()
+        }
+        renderLink?.invalidate()
+        renderLink = nil
+        removeFromSuperview()
+    }
+
+    var isSnapshotReady: Bool {
+        surface != nil && surfaceIOReady
+    }
+
+    func requestSnapshot(
+        userdata: UnsafeMutableRawPointer,
+        callback: @escaping ghostty_surface_snapshot_cb
+    ) -> Bool {
+        guard let surface, surfaceIOReady else { return false }
+        ghostty_surface_request_snapshot(surface, userdata, callback)
+        return true
+    }
+
+    private func restoreFocusIfNeeded() {
+        guard inputEnabled, isHostAttached,
+              controller?.shouldRestoreFocus() == true else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isHostAttached, self.window != nil,
+                  self.controller?.shouldRestoreFocus() == true else { return }
+            _ = self.becomeFirstResponder()
+        }
+    }
+
     public override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesBegan(touches, with: event)
-        _ = becomeFirstResponder()
+        if inputEnabled, isHostAttached {
+            _ = becomeFirstResponder()
+        }
     }
 
     @objc
     private func handleScrollPan(_ gesture: UIPanGestureRecognizer) {
-        guard let surface else { return }
+        guard inputEnabled, isHostAttached, let surface else { return }
 
         let translation = gesture.translation(in: self)
         let scale = displayScale
@@ -265,27 +434,27 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
     }
 
     public override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        if forward(presses: presses, action: GHOSTTY_ACTION_PRESS) {
+        if handle(presses: presses, action: GHOSTTY_ACTION_PRESS) {
             return
         }
         super.pressesBegan(presses, with: event)
     }
 
     public override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        if forward(presses: presses, action: GHOSTTY_ACTION_RELEASE) {
+        if handle(presses: presses, action: GHOSTTY_ACTION_RELEASE) {
             return
         }
         super.pressesEnded(presses, with: event)
     }
 
     public override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        if forward(presses: presses, action: GHOSTTY_ACTION_RELEASE) {
-            return
-        }
-        super.pressesCancelled(presses, with: event)
+        releaseForwardedKeys()
+        _ = presses
+        _ = event
     }
 
     public func insertText(_ text: String) {
+        guard inputEnabled, isHostAttached else { return }
         if controller?.forwardInputText(text) == true {
             return
         }
@@ -293,6 +462,7 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
     }
 
     public func deleteBackward() {
+        guard inputEnabled, isHostAttached else { return }
         if controller?.forwardDeleteBackward() == true {
             return
         }
@@ -308,7 +478,7 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
 
     @objc
     private func drawFrame() {
-        guard let surface else { return }
+        guard isHostAttached, let surface else { return }
         ghostty_surface_draw(surface)
     }
 
@@ -338,6 +508,18 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
             },
             diagnostics: { [weak self] in
                 self?.surfaceDiagnostics()
+            },
+            setFindQuery: { [weak self] query in
+                self?.applyBindingAction("search:\(query)")
+            },
+            findNext: { [weak self] in
+                self?.applyBindingAction("navigate_search:next")
+            },
+            findPrevious: { [weak self] in
+                self?.applyBindingAction("navigate_search:previous")
+            },
+            clearFind: { [weak self] in
+                self?.applyBindingAction("end_search")
             }
         )
         reportSizeIfNeeded()
@@ -347,17 +529,36 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
     private func createSurfaceIfNeeded() {
         guard surface == nil, let app = runtime.app else { return }
 
-        var cfg = ghostty_surface_config_new()
-        cfg.userdata = Unmanaged.passUnretained(self).toOpaque()
-        cfg.platform_tag = GHOSTTY_PLATFORM_IOS
-        cfg.platform = ghostty_platform_u(ios: ghostty_platform_ios_s(
-            uiview: Unmanaged.passUnretained(self).toOpaque()
-        ))
-        cfg.scale_factor = Double(displayScale)
-        cfg.font_size = Float(terminalAppearance.fontSize ?? 0)
-        cfg.wait_after_command = false
+        let initialSnapshot = controller?.consumeInitialSnapshot()
+        func createSurface(with snapshot: Data?) -> ghostty_surface_t? {
+            var cfg = ghostty_surface_config_new()
+            cfg.userdata = Unmanaged.passUnretained(self).toOpaque()
+            cfg.platform_tag = GHOSTTY_PLATFORM_IOS
+            cfg.platform = ghostty_platform_u(ios: ghostty_platform_ios_s(
+                uiview: Unmanaged.passUnretained(self).toOpaque()
+            ))
+            cfg.scale_factor = Double(displayScale)
+            cfg.font_size = Float(terminalAppearance.fontSize ?? 0)
+            cfg.wait_after_command = false
+            guard let snapshot, !snapshot.isEmpty else {
+                return ghostty_surface_new(app, &cfg)
+            }
+            return snapshot.withUnsafeBytes { buffer in
+                cfg.initial_snapshot = buffer.bindMemory(to: UInt8.self).baseAddress
+                cfg.initial_snapshot_len = snapshot.count
+                return ghostty_surface_new(app, &cfg)
+            }
+        }
 
-        guard let created = ghostty_surface_new(app, &cfg) else { return }
+        let firstAttempt = createSurface(with: initialSnapshot)
+        let restored = firstAttempt != nil && initialSnapshot != nil
+        var created = firstAttempt
+        if created == nil, initialSnapshot != nil {
+            controller?.reportInitialSnapshotRejected()
+            created = createSurface(with: nil)
+        }
+        guard let created else { return }
+        restoredInitialSnapshot = restored
         surface = created
         runtime.registerSurface(created, view: self)
         // `font_size` is part of the surface creation config, so it is already
@@ -365,9 +566,13 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
         // avoid immediately replacing that grid with an identical one. Older
         // Metal renderers can otherwise leave cached cells pointing at the
         // retired glyph atlas until a full rebuild.
-        lastAppliedAppearance.fontSize = terminalAppearance.fontSize
+        if restored {
+            lastAppliedAppearance = terminalAppearance
+        } else {
+            lastAppliedAppearance.fontSize = terminalAppearance.fontSize
+        }
         synchronizeGhosttyLayerGeometry()
-        setSurfaceFocus(true)
+        setSurfaceFocus(controller == nil || controller?.shouldRestoreFocus() == true)
         updateSurfaceSize()
         ghostty_surface_refresh(created)
         ghostty_surface_draw(created)
@@ -386,8 +591,9 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
             guard let self, self.surface != nil else { return }
             self.runtime.tick()
             self.surfaceIOReady = true
-            self.applyTerminalAppearanceIfNeeded(force: true)
+            self.applyTerminalAppearanceIfNeeded(force: !self.restoredInitialSnapshot)
             self.flushPendingOutput()
+            self.restoreFocusIfNeeded()
         }
     }
 
@@ -399,7 +605,7 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
     }
 
     private func updateSurfaceSize() {
-        guard let surface else { return }
+        guard isHostAttached, let surface else { return }
         let scale = Double(displayScale)
         ghostty_surface_set_content_scale(surface, scale, scale)
         let width = UInt32(bounds.width * scale)
@@ -420,8 +626,25 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
         controller?.forwardTransportWrite(data)
     }
 
+    func reportFindStarted(_ query: String) {
+        controller?.reportFindStarted(query)
+    }
+
+    func reportFindEnded() {
+        controller?.reportFindEnded()
+    }
+
+    func reportFindTotal(_ total: Int?) {
+        controller?.reportFindTotal(total)
+    }
+
+    func reportFindSelected(_ selected: Int?) {
+        controller?.reportFindSelected(selected)
+    }
+
     func forwardNativeScrollDelta(_ delta: TerminiScrollDelta, surface: ghostty_surface_t? = nil) {
-        guard let surface = surface ?? self.surface, !delta.isZero else { return }
+        guard inputEnabled, isHostAttached,
+              let surface = surface ?? self.surface, !delta.isZero else { return }
         ghostty_surface_mouse_scroll(
             surface,
             delta.x,
@@ -442,7 +665,7 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
     }
 
     private func sendText(_ text: String) {
-        guard let surface else { return }
+        guard inputEnabled, isHostAttached, let surface else { return }
         let len = text.utf8CString.count
         guard len > 0 else { return }
         text.withCString { ptr in
@@ -471,11 +694,11 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
         guard let surface else { return }
         var canCommitAppearanceState = true
 
-        if force || lastAppliedAppearance.theme != terminalAppearance.theme {
-            if let theme = terminalAppearance.theme {
+        if force || lastAppliedAppearance.colorStyle != terminalAppearance.colorStyle {
+            if let theme = resolvedTerminalTheme {
                 ghostty_surface_set_color_scheme(surface, theme.ghosttyColorScheme)
                 processRemoteOutput(Data(theme.applyEscapeSequence.utf8))
-            } else if lastAppliedAppearance.theme != nil {
+            } else if lastAppliedAppearance.colorStyle != .terminalDefault {
                 ghostty_surface_set_color_scheme(surface, ambientGhosttyColorScheme)
                 processRemoteOutput(Data(TerminiTerminalTheme.resetEscapeSequence.utf8))
             } else if force {
@@ -485,11 +708,9 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
 
         let fontSizeChanged = lastAppliedAppearance.fontSize != terminalAppearance.fontSize
         let fontFamilyChanged = lastAppliedAppearance.fontFamily != terminalAppearance.fontFamily
-        let extraConfigFilePathsChanged = lastAppliedAppearance.extraConfigFilePaths
-            != terminalAppearance.extraConfigFilePaths
         let shouldApplyFontConfig = fontSizeChanged
             || fontFamilyChanged
-            || extraConfigFilePathsChanged
+            || (force && terminalAppearance.hasRuntimeFontOverride)
 
         if shouldApplyFontConfig {
             guard let config = runtime.makeSurfaceConfig(for: terminalAppearance) else {
@@ -517,7 +738,7 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
 
     private func updateBackgroundColor() {
         let isTerminalBackground = surfaceBackground == .terminal
-        let color = terminalAppearance.theme?.background ?? .init(hex: 0x000000)
+        let color = resolvedTerminalTheme?.background ?? .init(hex: 0x000000)
         let backgroundColor = isTerminalBackground
             ? UIColor(
                 red: CGFloat(color.red) / 255.0,
@@ -530,6 +751,64 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
         isOpaque = isTerminalBackground
         layer.isOpaque = isTerminalBackground
         layer.backgroundColor = backgroundColor.cgColor
+    }
+
+    private var resolvedTerminalTheme: TerminiTerminalTheme? {
+        switch terminalAppearance.colorStyle {
+        case .terminalDefault:
+            nil
+        case .system:
+            systemTerminalTheme
+        case let .theme(theme):
+            theme
+        }
+    }
+
+    private var systemTerminalTheme: TerminiTerminalTheme {
+        TerminiTerminalTheme(
+            id: "system",
+            name: "System",
+            colorScheme: traitCollection.userInterfaceStyle == .dark ? .dark : .light,
+            background: terminalColor(.systemBackground),
+            foreground: terminalColor(.label),
+            cursor: terminalColor(tintColor),
+            selectionBackground: terminalColor(.systemGray4),
+            selectionForeground: terminalColor(.label),
+            ansiPalette: [
+                terminalColor(.secondaryLabel),
+                terminalColor(.systemRed),
+                terminalColor(.systemGreen),
+                terminalColor(.systemOrange),
+                terminalColor(.systemBlue),
+                terminalColor(.systemPurple),
+                terminalColor(.systemTeal),
+                terminalColor(.label),
+                terminalColor(.tertiaryLabel),
+                terminalColor(.systemPink),
+                terminalColor(.systemMint),
+                terminalColor(.systemYellow),
+                terminalColor(.systemIndigo),
+                terminalColor(.systemPurple),
+                terminalColor(.systemCyan),
+                terminalColor(.label)
+            ]
+        )
+    }
+
+    private func terminalColor(_ color: UIColor) -> TerminiTerminalColor {
+        let resolved = color.resolvedColor(with: traitCollection)
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        guard resolved.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else {
+            return .init(hex: 0x000000)
+        }
+        return TerminiTerminalColor(
+            red: UInt8(min(max((red * 255).rounded(), 0), 255)),
+            green: UInt8(min(max((green * 255).rounded(), 0), 255)),
+            blue: UInt8(min(max((blue * 255).rounded(), 0), 255))
+        )
     }
 
     private var ambientGhosttyColorScheme: ghostty_color_scheme_e {
@@ -676,47 +955,79 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
         return String(decoding: data, as: UTF8.self)
     }
 
-    private func forward(presses: Set<UIPress>, action: ghostty_input_action_e) -> Bool {
-        guard let surface else { return false }
-        var handledAny = false
+    private func handle(presses: Set<UIPress>, action: ghostty_input_action_e) -> Bool {
+        guard inputEnabled, isHostAttached else { return true }
+        var ownsPress = false
+        var hasTextOnlyPresses = true
 
         for press in presses {
             guard let key = press.key else { continue }
-            handledAny = true
-
-            let text = key.characters
-
-            var keyEvent = ghostty_input_key_s(
-                action: action,
-                mods: mods(from: key.modifierFlags),
-                consumed_mods: GHOSTTY_MODS_NONE,
-                keycode: UInt32(key.keyCode.rawValue),
-                text: nil,
-                unshifted_codepoint: key.charactersIgnoringModifiers.unicodeScalars.first?.value ?? 0,
-                composing: false
-            )
-
-            if text.isEmpty {
-                ghostty_surface_key(surface, keyEvent)
-            } else {
-                text.utf8CString.withUnsafeBufferPointer { buffer in
-                    keyEvent.text = buffer.baseAddress
-                    ghostty_surface_key(surface, keyEvent)
+            switch route(for: key) {
+            case .text:
+                continue
+            case let .raw(descriptor):
+                ownsPress = true
+                hasTextOnlyPresses = false
+                switch action {
+                case GHOSTTY_ACTION_PRESS:
+                    guard forwardedKeys[descriptor.keyCode] == nil else { continue }
+                    guard let surface else { continue }
+                    sendHardwareKey(surface: surface, descriptor: descriptor, action: GHOSTTY_ACTION_PRESS)
+                    forwardedKeys[descriptor.keyCode] = descriptor
+                    repeatCoordinator.start(key: descriptor) { [weak self] descriptor in
+                        guard let surface = self?.surface else { return }
+                        sendHardwareKey(surface: surface, descriptor: descriptor, action: GHOSTTY_ACTION_REPEAT)
+                    }
+                case GHOSTTY_ACTION_RELEASE:
+                    guard let forwarded = forwardedKeys.removeValue(forKey: descriptor.keyCode) else {
+                        continue
+                    }
+                    repeatCoordinator.cancel(ifMatchingKeyCode: descriptor.keyCode)
+                    if let surface {
+                        sendHardwareKey(surface: surface, descriptor: forwarded, action: GHOSTTY_ACTION_RELEASE)
+                    }
+                default:
+                    break
                 }
+            case .unsupported:
+                ownsPress = true
+                hasTextOnlyPresses = false
             }
         }
 
-        return handledAny
+        return ownsPress || !hasTextOnlyPresses
     }
 
-    private func mods(from flags: UIKeyModifierFlags) -> ghostty_input_mods_e {
-        var raw = GHOSTTY_MODS_NONE.rawValue
-        if flags.contains(.shift) { raw |= GHOSTTY_MODS_SHIFT.rawValue }
-        if flags.contains(.control) { raw |= GHOSTTY_MODS_CTRL.rawValue }
-        if flags.contains(.alternate) { raw |= GHOSTTY_MODS_ALT.rawValue }
-        if flags.contains(.command) { raw |= GHOSTTY_MODS_SUPER.rawValue }
-        if flags.contains(.alphaShift) { raw |= GHOSTTY_MODS_CAPS.rawValue }
-        return ghostty_input_mods_e(rawValue: raw)
+    private func route(for key: UIKey) -> TerminiHardwareKeyRoute {
+        TerminiHardwareKeyTranslation.route(
+            hidUsage: UInt16(truncatingIfNeeded: key.keyCode.rawValue),
+            characters: key.characters,
+            charactersIgnoringModifiers: key.charactersIgnoringModifiers,
+            modifiers: TerminiHardwareKeyModifiers(uiKeyModifierFlags: key.modifierFlags)
+        )
+    }
+
+    private func releaseForwardedKeys() {
+        repeatCoordinator.cancel()
+        let keys = Array(forwardedKeys.values)
+        forwardedKeys.removeAll()
+        guard let surface else { return }
+        for key in keys {
+            sendHardwareKey(surface: surface, descriptor: key, action: GHOSTTY_ACTION_RELEASE)
+        }
+    }
+}
+
+private extension TerminiHardwareKeyModifiers {
+    init(uiKeyModifierFlags flags: UIKeyModifierFlags) {
+        var modifiers = Self()
+        if flags.contains(.alphaShift) { modifiers.insert(.capsLock) }
+        if flags.contains(.shift) { modifiers.insert(.shift) }
+        if flags.contains(.control) { modifiers.insert(.control) }
+        if flags.contains(.alternate) { modifiers.insert(.alternate) }
+        if flags.contains(.command) { modifiers.insert(.command) }
+        if flags.contains(.numericPad) { modifiers.insert(.numericPad) }
+        self = modifiers
     }
 }
 
