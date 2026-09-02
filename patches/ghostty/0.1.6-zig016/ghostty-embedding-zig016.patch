@@ -1,52 +1,335 @@
+diff --git a/.gitattributes b/.gitattributes
+index 6ab2e8b..29b9b34 100644
+--- a/.gitattributes
++++ b/.gitattributes
+@@ -50 +49,0 @@ website/** linguist-documentation
+-pkg/breakpad/vendor/** linguist-vendored
+diff --git a/.github/DISCUSSION_TEMPLATE/issue-triage.yml b/.github/DISCUSSION_TEMPLATE/issue-triage.yml
+index a29e6f1..74e3323 100644
+--- a/.github/DISCUSSION_TEMPLATE/issue-triage.yml
++++ b/.github/DISCUSSION_TEMPLATE/issue-triage.yml
+@@ -27 +26,0 @@ body:
+-        > - **Crashes:** (macOS) include the [Sentry UUID](https://github.com/ghostty-org/ghostty?tab=readme-ov-file#crash-reports); (Linux) try to reproduce using a debug build and provide the stack trace.
+diff --git a/.github/workflows/release-tag.yml b/.github/workflows/release-tag.yml
+index 1f80040..4c8a69f 100644
+--- a/.github/workflows/release-tag.yml
++++ b/.github/workflows/release-tag.yml
+@@ -293,19 +292,0 @@ jobs:
+-  sentry-dsym:
+-    runs-on: namespace-profile-ghostty-sm
+-    needs: [build-macos]
+-    steps:
+-      - name: Install sentry-cli
+-        run: |
+-          curl -sL https://sentry.io/get-cli/ | bash
+-
+-      - name: Download macOS Artifacts
+-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+-        with:
+-          name: macos
+-
+-      - name: Upload dSYM to Sentry
+-        env:
+-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+-        run: |
+-          sentry-cli dif upload --project ghostty --wait ghostty-macos-universal-dsym.zip
+-
+diff --git a/.github/workflows/release-tip.yml b/.github/workflows/release-tip.yml
+index dd1a23c..e828dde 100644
+--- a/.github/workflows/release-tip.yml
++++ b/.github/workflows/release-tip.yml
+@@ -130,69 +129,0 @@ jobs:
+-  sentry-dsym-debug-slow:
+-    runs-on: namespace-profile-ghostty-sm
+-    needs: [setup, build-macos-debug-slow]
+-    if: needs.setup.outputs.should_skip != 'true'
+-    env:
+-      GHOSTTY_COMMIT_LONG: ${{ needs.setup.outputs.commit_long }}
+-    steps:
+-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+-
+-      - name: Install sentry-cli
+-        run: |
+-          curl -sL https://sentry.io/get-cli/ | bash
+-
+-      - name: Download dSYM
+-        run: |
+-          curl -L https://tip.files.ghostty.dev/${GHOSTTY_COMMIT_LONG}/ghostty-macos-universal-debug-slow-dsym.zip > dsym.zip
+-
+-      - name: Upload dSYM to Sentry
+-        env:
+-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+-        run: |
+-          sentry-cli dif upload --project ghostty --wait dsym.zip
+-
+-  sentry-dsym-debug-fast:
+-    runs-on: namespace-profile-ghostty-sm
+-    needs: [setup, build-macos-debug-fast]
+-    if: needs.setup.outputs.should_skip != 'true'
+-    env:
+-      GHOSTTY_COMMIT_LONG: ${{ needs.setup.outputs.commit_long }}
+-    steps:
+-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+-
+-      - name: Install sentry-cli
+-        run: |
+-          curl -sL https://sentry.io/get-cli/ | bash
+-
+-      - name: Download dSYM
+-        run: |
+-          curl -L https://tip.files.ghostty.dev/${GHOSTTY_COMMIT_LONG}/ghostty-macos-universal-debug-fast-dsym.zip > dsym.zip
+-
+-      - name: Upload dSYM to Sentry
+-        env:
+-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+-        run: |
+-          sentry-cli dif upload --project ghostty --wait dsym.zip
+-
+-  sentry-dsym:
+-    runs-on: namespace-profile-ghostty-sm
+-    needs: [setup, build-macos]
+-    if: needs.setup.outputs.should_skip != 'true'
+-    env:
+-      GHOSTTY_COMMIT_LONG: ${{ needs.setup.outputs.commit_long }}
+-    steps:
+-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+-
+-      - name: Install sentry-cli
+-        run: |
+-          curl -sL https://sentry.io/get-cli/ | bash
+-
+-      - name: Download dSYM
+-        run: |
+-          curl -L https://tip.files.ghostty.dev/${GHOSTTY_COMMIT_LONG}/ghostty-macos-universal-dsym.zip > dsym.zip
+-
+-      - name: Upload dSYM to Sentry
+-        env:
+-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+-        run: |
+-          sentry-cli dif upload --project ghostty --wait dsym.zip
+-
+diff --git a/.github/workflows/test.yml b/.github/workflows/test.yml
+index ec8b884..92f9f30 100644
+--- a/.github/workflows/test.yml
++++ b/.github/workflows/test.yml
+@@ -112 +111,0 @@ jobs:
+-      - test-sentry-linux
+@@ -1457,35 +1455,0 @@ jobs:
+-  test-sentry-linux:
+-    strategy:
+-      fail-fast: false
+-      matrix:
+-        sentry: ["true", "false"]
+-    name: Build -Dsentry=${{ matrix.sentry }}
+-    runs-on: namespace-profile-ghostty-sm
+-    needs: test
+-    env:
+-      ZIG_LOCAL_CACHE_DIR: /zig/local-cache
+-      ZIG_GLOBAL_CACHE_DIR: /zig/global-cache
+-    steps:
+-      - name: Checkout code
+-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+-
+-      - name: Setup Cache
+-        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
+-        with:
+-          path: |
+-            /nix
+-            /zig
+-
+-      # Install Nix and use that to run our tests so our environment matches exactly.
+-      - uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+-        with:
+-          nix_path: nixpkgs=channel:nixos-unstable
+-      - uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
+-        with:
+-          name: ghostty
+-          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+-
+-      - name: Test Sentry Build
+-        run: |
+-          nix develop -c zig build -Dsentry=${{ matrix.sentry }}
+-
+diff --git a/README.md b/README.md
+index 808b684..6c19f20 100644
+--- a/README.md
++++ b/README.md
+@@ -186,41 +185,0 @@ We haven't done any of this yet.
+-
+-## Crash Reports
+-
+-Ghostty has a built-in crash reporter that will generate and save crash
+-reports to disk. The crash reports are saved to the `$XDG_STATE_HOME/ghostty/crash`
+-directory. If `$XDG_STATE_HOME` is not set, the default is `~/.local/state`.
+-**Crash reports are _not_ automatically sent anywhere off your machine.**
+-
+-Crash reports are only generated the next time Ghostty is started after a
+-crash. If Ghostty crashes and you want to generate a crash report, you must
+-restart Ghostty at least once. You should see a message in the log that a
+-crash report was generated.
+-
+-> [!NOTE]
+->
+-> Use the `ghostty +crash-report` CLI command to get a list of available crash
+-> reports. A future version of Ghostty will make the contents of the crash
+-> reports more easily viewable through the CLI and GUI.
+-
+-Crash reports end in the `.ghosttycrash` extension. The crash reports are in
+-[Sentry envelope format](https://develop.sentry.dev/sdk/envelopes/). You can
+-upload these to your own Sentry account to view their contents, but the format
+-is also publicly documented so any other available tools can also be used.
+-The `ghostty +crash-report` CLI command can be used to list any crash reports.
+-A future version of Ghostty will show you the contents of the crash report
+-directly in the terminal.
+-
+-To send the crash report to the Ghostty project, you can use the following
+-CLI command using the [Sentry CLI](https://docs.sentry.io/cli/installation/):
+-
+-```shell-session
+-SENTRY_DSN=https://e914ee84fd895c4fe324afa3e53dac76@o4507352570920960.ingest.us.sentry.io/4507850923638784 sentry-cli send-envelope --raw <path to ghostty crash>
+-```
+-
+-> [!WARNING]
+->
+-> The crash report can contain sensitive information. The report doesn't
+-> purposely contain sensitive information, but it does contain the full
+-> stack memory of each thread at the time of the crash. This information
+-> is used to rebuild the stack trace but can also contain sensitive data
+-> depending on when the crash occurred.
+diff --git a/build.zig.zon b/build.zig.zon
+index f97fddc..8926e4a 100644
+--- a/build.zig.zon
++++ b/build.zig.zon
+@@ -86 +85,0 @@
+-        .sentry = .{ .path = "./pkg/sentry", .lazy = true },
+diff --git a/build.zig.zon.json b/build.zig.zon.json
+index 9c6e316..fdab4bf 100644
+--- a/build.zig.zon.json
++++ b/build.zig.zon.json
+@@ -12,5 +11,0 @@
+-  "N-V-__8AALw2uwF_03u4JRkZwRLc3Y9hakkYV7NKRR9-RIZJ": {
+-    "name": "breakpad",
+-    "url": "https://deps.files.ghostty.org/breakpad-b99f444ba5f6b98cac261cbb391d8766b34a5918.tar.gz",
+-    "hash": "sha256-bMqYlD0amQdmzvYQd8Ca/1k4Bj/heh7+EijlQSttatk="
+-  },
+@@ -107,5 +101,0 @@
+-  "N-V-__8AAPlZGwBEa-gxrcypGBZ2R8Bse4JYSfo_ul8i2jlG": {
+-    "name": "sentry",
+-    "url": "https://deps.files.ghostty.org/sentry-1220446be831adcca918167647c06c7b825849fa3fba5f22da394667974537a9c77e.tar.gz",
+-    "hash": "sha256-KsZJfMjWGo0xCT5HrduMmyxFsWsHBbszSoNbZCPDGN8="
+-  },
+diff --git a/build.zig.zon.nix b/build.zig.zon.nix
+index 01bc76f..b04edc2 100644
+--- a/build.zig.zon.nix
++++ b/build.zig.zon.nix
+@@ -118,9 +117,0 @@ in
+-    {
+-      name = "N-V-__8AALw2uwF_03u4JRkZwRLc3Y9hakkYV7NKRR9-RIZJ";
+-      path = fetchZigArtifact {
+-        name = "breakpad";
+-        url = "https://deps.files.ghostty.org/breakpad-b99f444ba5f6b98cac261cbb391d8766b34a5918.tar.gz";
+-        hash = "sha256-bMqYlD0amQdmzvYQd8Ca/1k4Bj/heh7+EijlQSttatk=";
+-        unpack = false;
+-      };
+-    }
+@@ -289,9 +279,0 @@ in
+-    {
+-      name = "N-V-__8AAPlZGwBEa-gxrcypGBZ2R8Bse4JYSfo_ul8i2jlG";
+-      path = fetchZigArtifact {
+-        name = "sentry";
+-        url = "https://deps.files.ghostty.org/sentry-1220446be831adcca918167647c06c7b825849fa3fba5f22da394667974537a9c77e.tar.gz";
+-        hash = "sha256-KsZJfMjWGo0xCT5HrduMmyxFsWsHBbszSoNbZCPDGN8=";
+-        unpack = false;
+-      };
+-    }
+diff --git a/build.zig.zon.txt b/build.zig.zon.txt
+index 9c726c1..1d1f844 100644
+--- a/build.zig.zon.txt
++++ b/build.zig.zon.txt
+@@ -8 +7,0 @@ https://deps.files.ghostty.org/NerdFontsSymbolsOnly-3.4.0.tar.gz
+-https://deps.files.ghostty.org/breakpad-b99f444ba5f6b98cac261cbb391d8766b34a5918.tar.gz
+@@ -23 +21,0 @@ https://deps.files.ghostty.org/plasma_wayland_protocols-12207e0851c12acdeee0991e
+-https://deps.files.ghostty.org/sentry-1220446be831adcca918167647c06c7b825849fa3fba5f22da394667974537a9c77e.tar.gz
+diff --git a/flatpak/zig-packages.json b/flatpak/zig-packages.json
+index d03df3d..1a16f9b 100644
+--- a/flatpak/zig-packages.json
++++ b/flatpak/zig-packages.json
+@@ -14,6 +13,0 @@
+-  {
+-    "type": "archive",
+-    "url": "https://deps.files.ghostty.org/breakpad-b99f444ba5f6b98cac261cbb391d8766b34a5918.tar.gz",
+-    "dest": "vendor/p/N-V-__8AALw2uwF_03u4JRkZwRLc3Y9hakkYV7NKRR9-RIZJ",
+-    "sha256": "6cca98943d1a990766cef61077c09aff5938063fe17a1efe1228e5412b6d6ad9"
+-  },
+@@ -128,6 +121,0 @@
+-  {
+-    "type": "archive",
+-    "url": "https://deps.files.ghostty.org/sentry-1220446be831adcca918167647c06c7b825849fa3fba5f22da394667974537a9c77e.tar.gz",
+-    "dest": "vendor/p/N-V-__8AAPlZGwBEa-gxrcypGBZ2R8Bse4JYSfo_ul8i2jlG",
+-    "sha256": "2ac6497cc8d61a8d31093e47addb8c9b2c45b16b0705bb334a835b6423c318df"
+-  },
 diff --git a/include/ghostty.h b/include/ghostty.h
-index df9472d21..d8936fa5c 100644
+index df9472d..ae66a04 100644
 --- a/include/ghostty.h
 +++ b/include/ghostty.h
-@@ -1034,6 +1034,7 @@ typedef void (*ghostty_runtime_write_clipboard_cb)(void*,
-                                                    const ghostty_clipboard_content_s*,
-                                                    size_t,
-                                                    bool);
+@@ -481,0 +482,2 @@ typedef struct {
++  const uint8_t* initial_snapshot;
++  size_t initial_snapshot_len;
+@@ -485,0 +488,23 @@ typedef struct {
++/**
++ * Result of an asynchronous embedded surface snapshot request.
++ */
++typedef enum {
++  GHOSTTY_SURFACE_SNAPSHOT_SUCCESS = 0,
++  GHOSTTY_SURFACE_SNAPSHOT_ERROR = 1,
++  GHOSTTY_SURFACE_SNAPSHOT_CANCELLED = 2,
++} ghostty_surface_snapshot_status_e;
++
++/**
++ * Called once when an embedded surface snapshot request completes.
++ *
++ * On success, bytes points to a complete Ghostty terminal snapshot and is
++ * borrowed only for the duration of this callback. The caller must copy it
++ * immediately if it needs to retain it. On error or cancellation, bytes is
++ * NULL and length is zero. The callback may execute on Ghostty's IO thread.
++ */
++typedef void (*ghostty_surface_snapshot_cb)(
++    void*,
++    ghostty_surface_snapshot_status_e,
++    const uint8_t*,
++    size_t);
++
+@@ -1036,0 +1062 @@ typedef void (*ghostty_runtime_write_clipboard_cb)(void*,
 +typedef void (*ghostty_runtime_write_to_host_cb)(void*, const uint8_t*, size_t);
- typedef void (*ghostty_runtime_close_surface_cb)(void*, bool);
- typedef bool (*ghostty_runtime_action_cb)(ghostty_app_t,
-                                           ghostty_target_s,
-@@ -1047,6 +1048,7 @@ typedef struct {
-   ghostty_runtime_read_clipboard_cb read_clipboard_cb;
-   ghostty_runtime_confirm_read_clipboard_cb confirm_read_clipboard_cb;
-   ghostty_runtime_write_clipboard_cb write_clipboard_cb;
+@@ -1049,0 +1076 @@ typedef struct {
 +  ghostty_runtime_write_to_host_cb write_to_host_cb;
-   ghostty_runtime_close_surface_cb close_surface_cb;
- } ghostty_runtime_config_s;
- 
-@@ -1099,6 +1101,12 @@ GHOSTTY_API void ghostty_config_load_file(ghostty_config_t, const char*);
- GHOSTTY_API void ghostty_config_load_default_files(ghostty_config_t);
- GHOSTTY_API void ghostty_config_load_recursive_files(ghostty_config_t);
- GHOSTTY_API void ghostty_config_finalize(ghostty_config_t);
+@@ -1101,0 +1129,6 @@ GHOSTTY_API void ghostty_config_finalize(ghostty_config_t);
 +GHOSTTY_API void ghostty_config_set_font_size(ghostty_config_t, float);
 +GHOSTTY_API bool ghostty_config_set_font_family(ghostty_config_t,
 +                                              const char*,
 +                                              uintptr_t);
 +GHOSTTY_API uint32_t ghostty_config_font_family_count(ghostty_config_t);
 +GHOSTTY_API const char* ghostty_config_font_family_get(ghostty_config_t, uint32_t);
- GHOSTTY_API bool ghostty_config_get(ghostty_config_t, void*, const char*, uintptr_t);
- GHOSTTY_API ghostty_input_trigger_s ghostty_config_trigger(ghostty_config_t,
-                                                               const char*,
-@@ -1151,6 +1159,7 @@ GHOSTTY_API bool ghostty_surface_key_is_binding(ghostty_surface_t,
-                                                    ghostty_input_key_s,
-                                                    ghostty_binding_flags_e*);
- GHOSTTY_API void ghostty_surface_text(ghostty_surface_t, const char*, uintptr_t);
+@@ -1153,0 +1187,4 @@ GHOSTTY_API void ghostty_surface_text(ghostty_surface_t, const char*, uintptr_t)
 +GHOSTTY_API void ghostty_surface_process_output(ghostty_surface_t, const char*, uintptr_t);
- GHOSTTY_API void ghostty_surface_preedit(ghostty_surface_t, const char*, uintptr_t);
- GHOSTTY_API bool ghostty_surface_mouse_captured(ghostty_surface_t);
- GHOSTTY_API bool ghostty_surface_mouse_button(ghostty_surface_t,
++GHOSTTY_API void ghostty_surface_request_snapshot(ghostty_surface_t,
++                                                  void*,
++                                                  ghostty_surface_snapshot_cb);
 diff --git a/src/Surface.zig b/src/Surface.zig
-index 3002e9f58..5efd6ae7d 100644
+index 3002e9f..8765c9a 100644
 --- a/src/Surface.zig
 +++ b/src/Surface.zig
-@@ -654,21 +654,26 @@ pub fn init(
-             std.fmt.bufPrint(&buf, "0x{x:0>16}", .{self.id}) catch unreachable,
-         );
- 
+@@ -25 +24,0 @@ const oni = @import("oniguruma");
+-const crash = @import("crash/main.zig");
+@@ -472,0 +472 @@ pub fn init(
++    initial_snapshot: ?[]u8,
+@@ -473,0 +474,5 @@ pub fn init(
++    // The embedded runtime owns this copy until Termio consumes it during
++    // initialization. Termio releases it on every success and failure path.
++    var initial_snapshot_owned = initial_snapshot;
++    defer if (initial_snapshot_owned) |bytes| alloc.free(bytes);
++
+@@ -657,15 +662,20 @@ pub fn init(
 -        // Initialize our IO backend
 -        var io_exec = try termio.Exec.init(alloc, .{
 -            .command = command,
@@ -82,52 +365,152 @@ index 3002e9f58..5efd6ae7d 100644
 +            errdefer io_exec.deinit();
 +            break :io_backend termio.Backend{ .exec = io_exec };
 +        };
- 
-         // Initialize our IO mailbox
-         var io_mailbox = try termio.Mailbox.initSPSC(alloc);
-@@ -678,7 +683,7 @@ pub fn init(
-             .size = size,
-             .full_config = config,
-             .config = try termio.Termio.DerivedConfig.init(alloc, config),
+@@ -676,0 +687,3 @@ pub fn init(
++        const termio_config = try termio.Termio.DerivedConfig.init(alloc, config);
++        const snapshot_for_termio = initial_snapshot_owned;
++        initial_snapshot_owned = null;
+@@ -680,2 +693,3 @@ pub fn init(
+-            .config = try termio.Termio.DerivedConfig.init(alloc, config),
 -            .backend = .{ .exec = io_exec },
++            .config = termio_config,
 +            .backend = io_backend,
-             .mailbox = io_mailbox,
-             .renderer_state = &self.renderer_state,
-             .renderer_wakeup = render_thread.wakeup,
-@@ -1333,6 +1338,7 @@ fn childExitedAbnormally(
-     // Build up our command for the error message
-     const command = try std.mem.join(alloc, " ", switch (self.io.backend) {
-         .exec => |*exec| exec.subprocess.args,
++            .initial_snapshot = snapshot_for_termio,
+@@ -889,0 +904,24 @@ fn queueIo(
++/// Queue host-owned terminal output behind the same IO mailbox used for
++/// embedded snapshot requests. The input is copied so callers may release it
++/// as soon as this function returns.
++pub fn processOutput(self: *Surface, data: []const u8) void {
++    const message = termio.Message.processOutputReq(self.alloc, data) catch |err| {
++        log.warn("failed to queue host output err={}", .{err});
++        return;
++    };
++    self.queueIo(message, .unlocked);
++}
++
++/// Queue an asynchronous snapshot request. The callback is invoked exactly
++/// once by the IO thread or by message cleanup when teardown cancels it.
++pub fn requestSnapshot(
++    self: *Surface,
++    userdata: ?*anyopaque,
++    callback: termio.Message.SnapshotCallback,
++) void {
++    self.io.queueMessageNonBlocking(.{ .snapshot_request = .{
++        .callback = callback,
++        .userdata = userdata,
++    } });
++}
++
+@@ -1335,0 +1374 @@ fn childExitedAbnormally(
 +        .host => &[_][]const u8{"embedding host"},
-     });
-     const runtime_str = try std.fmt.allocPrint(alloc, "{d} ms", .{info.runtime_ms});
- 
+@@ -2493,4 +2531,0 @@ pub fn sizeCallback(self: *Surface, size: apprt.SurfaceSize) !void {
+-    // Crash metadata in case we crash in here
+-    crash.sentry.thread_state = self.crashThreadState();
+-    defer crash.sentry.thread_state = null;
+-
+@@ -2554,4 +2588,0 @@ pub fn preeditCallback(self: *Surface, preedit_: ?[]const u8) !void {
+-    // Crash metadata in case we crash in here
+-    crash.sentry.thread_state = self.crashThreadState();
+-    defer crash.sentry.thread_state = null;
+-
+@@ -2687,4 +2717,0 @@ pub fn keyCallback(
+-    // Crash metadata in case we crash in here
+-    crash.sentry.thread_state = self.crashThreadState();
+-    defer crash.sentry.thread_state = null;
+-
+@@ -3309,4 +3335,0 @@ pub fn textCallback(self: *Surface, text: []const u8) !void {
+-    // Crash metadata in case we crash in here
+-    crash.sentry.thread_state = self.crashThreadState();
+-    defer crash.sentry.thread_state = null;
+-
+@@ -3320,4 +3342,0 @@ pub fn occlusionCallback(self: *Surface, visible: bool) !void {
+-    // Crash metadata in case we crash in here
+-    crash.sentry.thread_state = self.crashThreadState();
+-    defer crash.sentry.thread_state = null;
+-
+@@ -3349,4 +3367,0 @@ pub fn focusCallback(self: *Surface, focused: bool) !void {
+-    // Crash metadata in case we crash in here
+-    crash.sentry.thread_state = self.crashThreadState();
+-    defer crash.sentry.thread_state = null;
+-
+@@ -3437,4 +3451,0 @@ pub fn refreshCallback(self: *Surface) !void {
+-    // Crash metadata in case we crash in here
+-    crash.sentry.thread_state = self.crashThreadState();
+-    defer crash.sentry.thread_state = null;
+-
+@@ -3474,4 +3484,0 @@ pub fn scrollCallback(
+-    // Crash metadata in case we crash in here
+-    crash.sentry.thread_state = self.crashThreadState();
+-    defer crash.sentry.thread_state = null;
+-
+@@ -3648,4 +3654,0 @@ pub fn contentScaleCallback(self: *Surface, content_scale: apprt.ContentScale) !
+-    // Crash metadata in case we crash in here
+-    crash.sentry.thread_state = self.crashThreadState();
+-    defer crash.sentry.thread_state = null;
+-
+@@ -3806,4 +3808,0 @@ pub fn mouseButtonCallback(
+-    // Crash metadata in case we crash in here
+-    crash.sentry.thread_state = self.crashThreadState();
+-    defer crash.sentry.thread_state = null;
+-
+@@ -4491,4 +4489,0 @@ pub fn mousePressureCallback(
+-    // Crash metadata in case we crash in here
+-    crash.sentry.thread_state = self.crashThreadState();
+-    defer crash.sentry.thread_state = null;
+-
+@@ -4555,4 +4549,0 @@ pub fn cursorPosCallback(
+-    // Crash metadata in case we crash in here
+-    crash.sentry.thread_state = self.crashThreadState();
+-    defer crash.sentry.thread_state = null;
+-
+@@ -4744,4 +4734,0 @@ pub fn colorSchemeCallback(self: *Surface, scheme: apprt.ColorScheme) !void {
+-    // Crash metadata in case we crash in here
+-    crash.sentry.thread_state = self.crashThreadState();
+-    defer crash.sentry.thread_state = null;
+-
+@@ -6068,7 +6054,0 @@ fn showDesktopNotification(self: *Surface, title: [:0]const u8, body: [:0]const
+-fn crashThreadState(self: *Surface) crash.sentry.ThreadState {
+-    return .{
+-        .type = .main,
+-        .surface = self,
+-    };
+-}
+-
 diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
-index a380dc50c..cb3870209 100644
+index a380dc5..7316373 100644
 --- a/src/apprt/embedded.zig
 +++ b/src/apprt/embedded.zig
-@@ -22,6 +22,7 @@ const CoreSurface = @import("../Surface.zig");
- const configpkg = @import("../config.zig");
- const Config = configpkg.Config;
- const String = @import("../main_c.zig").String;
+@@ -24,0 +25 @@ const String = @import("../main_c.zig").String;
 +const termio = @import("../termio.zig");
- 
- const log = std.log.scoped(.embedded_window);
- 
-@@ -77,6 +78,9 @@ pub const App = struct {
-             bool,
-         ) callconv(.c) void,
- 
+@@ -79,0 +81,3 @@ pub const App = struct {
 +        /// Write bytes back to the embedding host instead of to a pty.
 +        write_to_host: ?*const fn (SurfaceUD, [*]const u8, usize) callconv(.c) void = null,
 +
-         /// Close the current surface given by this function.
-         close_surface: ?*const fn (SurfaceUD, bool) callconv(.c) void = null,
-     };
-@@ -1000,6 +1004,15 @@ pub const Surface = struct {
-         return env;
-     }
- 
+@@ -478,0 +483,5 @@ pub const Surface = struct {
++        /// Optional complete terminal snapshot to restore during surface
++        /// construction. The input is borrowed until construction returns.
++        initial_snapshot: ?[*]const u8 = null,
++        initial_snapshot_len: usize = 0,
++
+@@ -486,0 +496,13 @@ pub const Surface = struct {
++        if (opts.initial_snapshot_len > 0 and opts.initial_snapshot == null) {
++            return error.InvalidInitialSnapshot;
++        }
++
++        var initial_snapshot: ?[]u8 = if (opts.initial_snapshot) |ptr| blk: {
++            if (opts.initial_snapshot_len == 0) break :blk null;
++            break :blk try app.core_app.alloc.dupe(
++                u8,
++                ptr[0..opts.initial_snapshot_len],
++            );
++        } else null;
++        defer if (initial_snapshot) |bytes| app.core_app.alloc.free(bytes);
++
+@@ -598,0 +621,2 @@ pub const Surface = struct {
++        const snapshot_for_core = initial_snapshot;
++        initial_snapshot = null;
+@@ -604,0 +629 @@ pub const Surface = struct {
++            snapshot_for_core,
+@@ -1002,0 +1028,9 @@ pub const Surface = struct {
 +    pub fn termioBackend(self: *const Surface) ?termio.Backend {
 +        const write_to_host = self.app.opts.write_to_host orelse return null;
 +
@@ -137,33 +520,117 @@ index a380dc50c..cb3870209 100644
 +        }) };
 +    }
 +
-     /// The cursor position from the host directly is in screen coordinates but
-     /// all our interface works in pixels.
-     fn cursorPosToPixels(self: *const Surface, pos: apprt.CursorPos) !apprt.CursorPos {
-@@ -1827,6 +1840,15 @@ pub const CAPI = struct {
-         surface.textCallback(ptr[0..len]);
-     }
- 
+@@ -1829,0 +1864,21 @@ pub const CAPI = struct {
 +    /// Process output from a host-owned transport.
 +    export fn ghostty_surface_process_output(
 +        surface: *Surface,
 +        ptr: [*]const u8,
 +        len: usize,
 +    ) void {
-+        surface.core_surface.io.processOutput(ptr[0..len]);
++        surface.core_surface.processOutput(ptr[0..len]);
 +    }
 +
-     /// Set the preedit text for the surface. This is used for IME
-     /// composition. If the length is 0, then the preedit text is cleared.
-     export fn ghostty_surface_preedit(
++    /// Request an asynchronous complete terminal snapshot. Snapshot bytes are
++    /// borrowed only for the callback duration and must be copied immediately.
++    export fn ghostty_surface_request_snapshot(
++        surface: ?*Surface,
++        userdata: ?*anyopaque,
++        callback: ?termio.Message.SnapshotCallback,
++    ) void {
++        const surface_ = surface orelse return;
++        const callback_ = callback orelse return;
++        surface_.core_surface.requestSnapshot(userdata, callback_);
++    }
++
+diff --git a/src/build/Config.zig b/src/build/Config.zig
+index 0527022..81fde2c 100644
+--- a/src/build/Config.zig
++++ b/src/build/Config.zig
+@@ -33 +32,0 @@ wayland: bool = false,
+-sentry: bool = true,
+@@ -190,14 +188,0 @@ pub fn init(b: *std.Build, appVersion: []const u8, libVersion: []const u8) !Conf
+-    config.sentry = b.option(
+-        bool,
+-        "sentry",
+-        "Build with Sentry crash reporting. Default for macOS is true, false for any other system.",
+-    ) orelse sentry: {
+-        switch (target.result.os.tag) {
+-            .macos, .ios => break :sentry true,
+-
+-            // Note its false for linux because the crash reports on Linux
+-            // don't have much useful information.
+-            else => break :sentry false,
+-        }
+-    };
+-
+@@ -607 +591,0 @@ pub fn addOptions(self: *const Config, step: *std.Build.Step.Options) !void {
+-    step.addOption(bool, "sentry", self.sentry);
+diff --git a/src/build/GhosttyDist.zig b/src/build/GhosttyDist.zig
+index fe8b863..c55a638 100644
+--- a/src/build/GhosttyDist.zig
++++ b/src/build/GhosttyDist.zig
+@@ -202 +201,0 @@ const lib_vt_excludes = &[_][]const u8{
+-    "src/crash/testdata",
+@@ -205 +203,0 @@ const lib_vt_excludes = &[_][]const u8{
+-    "pkg/breakpad/vendor",
+diff --git a/src/build/SharedDeps.zig b/src/build/SharedDeps.zig
+index e40f13a..ea6b1b6 100644
+--- a/src/build/SharedDeps.zig
++++ b/src/build/SharedDeps.zig
+@@ -143,3 +142,0 @@ fn initTarget(
+-    // Sentry only provides Apple module maps for macOS and iOS, so exclude it
+-    // from visionOS XCFramework slices.
+-    if (target.result.os.tag == .visionos) config.sentry = false;
+@@ -410,30 +406,0 @@ pub fn add(
+-    // Sentry
+-    if (self.config.sentry) {
+-        if (b.lazyDependency("sentry", .{
+-            .target = target,
+-            .optimize = optimize,
+-            .backend = .breakpad,
+-        })) |sentry_dep| {
+-            step.root_module.addImport(
+-                "sentry",
+-                sentry_dep.module("sentry"),
+-            );
+-            step.root_module.linkLibrary(sentry_dep.artifact("sentry"));
+-            try static_libs.append(
+-                b.allocator,
+-                sentry_dep.artifact("sentry").getEmittedBin(),
+-            );
+-
+-            // We also need to include breakpad in the static libs.
+-            if (sentry_dep.builder.lazyDependency("breakpad", .{
+-                .target = target,
+-                .optimize = optimize,
+-            })) |breakpad_dep| {
+-                try static_libs.append(
+-                    b.allocator,
+-                    breakpad_dep.artifact("breakpad").getEmittedBin(),
+-                );
+-            }
+-        }
+-    }
+-
+diff --git a/src/cli/ghostty.zig b/src/cli/ghostty.zig
+index 572aa8a..4006fb7 100644
+--- a/src/cli/ghostty.zig
++++ b/src/cli/ghostty.zig
+@@ -20 +19,0 @@ const validate_config = @import("validate_config.zig");
+-const crash_report = @import("crash_report.zig");
+@@ -74,3 +72,0 @@ pub const Action = enum {
+-    // List, (eventually) view, and (eventually) send crash reports.
+-    @"crash-report",
+-
+@@ -168 +163,0 @@ pub const Action = enum {
+-            .@"crash-report" => try crash_report.run(alloc),
+@@ -211 +205,0 @@ pub const Action = enum {
+-                .@"crash-report" => crash_report.Options,
 diff --git a/src/config/CApi.zig b/src/config/CApi.zig
-index f69f48ea4..6d2ddf04d 100644
+index f69f48e..6d2ddf0 100644
 --- a/src/config/CApi.zig
 +++ b/src/config/CApi.zig
-@@ -90,6 +90,36 @@ export fn ghostty_config_finalize(self: *Config) void {
-     };
- }
- 
+@@ -92,0 +93,30 @@ export fn ghostty_config_finalize(self: *Config) void {
 +export fn ghostty_config_set_font_size(self: *Config, size: f32) void {
 +    self.@"font-size" = std.math.clamp(size, 1.0, 255.0);
 +}
@@ -194,13 +661,7 @@ index f69f48ea4..6d2ddf04d 100644
 +    return @ptrCast(items[idx].ptr);
 +}
 +
- export fn ghostty_config_get(
-     self: *Config,
-     ptr: *anyopaque,
-@@ -121,6 +151,25 @@ fn config_trigger_(
-     return trigger.cval();
- }
- 
+@@ -123,0 +154,19 @@ fn config_trigger_(
 +fn config_set_font_family_(self: *Config, value: []const u8) !void {
 +    const alloc = self._arena.?.allocator();
 +
@@ -220,13 +681,7 @@ index f69f48ea4..6d2ddf04d 100644
 +    value.overwrite_next = false;
 +}
 +
- export fn ghostty_config_diagnostics_count(self: *Config) u32 {
-     return @intCast(self._diagnostics.items().len);
- }
-@@ -146,6 +195,41 @@ const Diagnostic = extern struct {
-     message: [*:0]const u8 = "",
- };
- 
+@@ -148,0 +198,35 @@ const Diagnostic = extern struct {
 +test "c_api: set font family overwrites style-specific families" {
 +    const testing = std.testing;
 +    const alloc = testing.allocator;
@@ -262,135 +717,422 @@ index f69f48ea4..6d2ddf04d 100644
 +    try testing.expectEqual(@as(f32, 255), config.@"font-size");
 +}
 +
- test "ghostty_config_get: bool" {
-     const testing = std.testing;
-     const alloc = testing.allocator;
+diff --git a/src/global.zig b/src/global.zig
+index 3312039..ab3ce11 100644
+--- a/src/global.zig
++++ b/src/global.zig
+@@ -4 +3,0 @@ const build_config = @import("build_config.zig");
+-const build_options = @import("build_options");
+@@ -11 +9,0 @@ const oni = @import("oniguruma");
+-const crash = @import("crash/main.zig");
+@@ -183,21 +180,0 @@ pub fn init(opts: InitOpts) !void {
+-    if (build_options.sentry) {
+-        // Initialize our crash reporting. The environ map snapshot is
+-        // owned by crash.init (it is freed by the init thread).
+-        const environ_map = try self.environ.createMap(self.alloc);
+-        crash.init(self.alloc, environ_map) catch |err| {
+-            std.log.warn(
+-                "sentry init failed, no crash capture available err={}",
+-                .{err},
+-            );
+-        };
+-    }
+-
+-    // const sentrylib = @import("sentry");
+-    // if (sentrylib.captureEvent(sentrylib.Value.initMessageEvent(
+-    //     .info,
+-    //     null,
+-    //     "hello, world",
+-    // ))) |uuid| {
+-    //     std.log.warn("uuid={s}", .{uuid.string()});
+-    // } else std.log.warn("failed to capture event", .{});
+-
+@@ -237,3 +213,0 @@ pub fn deinit() void {
+-    // Flush our crash logs
+-    crash.deinit();
+-
+diff --git a/src/main_ghostty.zig b/src/main_ghostty.zig
+index 86e7798..6f59a53 100644
+--- a/src/main_ghostty.zig
++++ b/src/main_ghostty.zig
+@@ -248 +247,0 @@ test {
+-    _ = @import("crash/main.zig");
+diff --git a/src/renderer/Thread.zig b/src/renderer/Thread.zig
+index e3e2cec..83bd3bb 100644
+--- a/src/renderer/Thread.zig
++++ b/src/renderer/Thread.zig
+@@ -9 +8,0 @@ const xev = global.xev;
+-const crash = @import("../crash/main.zig");
+@@ -234,7 +232,0 @@ fn threadMain_(self: *Thread) !void {
+-    // Setup our crash metadata
+-    crash.sentry.thread_state = .{
+-        .type = .renderer,
+-        .surface = self.renderer.surface_mailbox.surface,
+-    };
+-    defer crash.sentry.thread_state = null;
+-
 diff --git a/src/termio.zig b/src/termio.zig
-index b16885109..e2860fe2a 100644
+index b168851..e2860fe 100644
 --- a/src/termio.zig
 +++ b/src/termio.zig
-@@ -23,6 +23,7 @@ const message = @import("termio/message.zig");
- pub const backend = @import("termio/backend.zig");
- pub const mailbox = @import("termio/mailbox.zig");
- pub const Exec = @import("termio/Exec.zig");
+@@ -25,0 +26 @@ pub const Exec = @import("termio/Exec.zig");
 +pub const Host = @import("termio/Host.zig");
- pub const Options = @import("termio/Options.zig");
- pub const Termio = @import("termio/Termio.zig");
- pub const Thread = @import("termio/Thread.zig");
+diff --git a/src/termio/Exec.zig b/src/termio/Exec.zig
+index 0162917..cba0434 100644
+--- a/src/termio/Exec.zig
++++ b/src/termio/Exec.zig
+@@ -17 +16,0 @@ const configpkg = @import("../config.zig");
+-const crash = @import("../crash/main.zig");
+@@ -1423,7 +1421,0 @@ pub const ReadThread = struct {
+-        // Setup our crash metadata
+-        crash.sentry.thread_state = .{
+-            .type = .io,
+-            .surface = io.surface_mailbox.surface,
+-        };
+-        defer crash.sentry.thread_state = null;
+-
+@@ -1781,7 +1772,0 @@ pub const ReadThread = struct {
+-        // Setup our crash metadata
+-        crash.sentry.thread_state = .{
+-            .type = .io,
+-            .surface = io.surface_mailbox.surface,
+-        };
+-        defer crash.sentry.thread_state = null;
+-
+diff --git a/src/termio/Options.zig b/src/termio/Options.zig
+index a6bf8c4..2c10712 100644
+--- a/src/termio/Options.zig
++++ b/src/termio/Options.zig
+@@ -2,0 +3,2 @@
++const std = @import("std");
++const Allocator = std.mem.Allocator;
+@@ -7,0 +10 @@ const termio = @import("../termio.zig");
++const Options = @This();
+@@ -22,0 +26,4 @@ backend: termio.Backend,
++/// Optional allocator-owned complete terminal snapshot. This is consumed
++/// during Termio initialization and must be freed exactly once by the owner.
++initial_snapshot: ?[]u8 = null,
++
+@@ -41,0 +49,6 @@ surface_mailbox: apprt.surface.Mailbox,
++
++/// Release options-owned initialization data that was not consumed.
++pub fn deinit(self: *Options, alloc: Allocator) void {
++    if (self.initial_snapshot) |bytes| alloc.free(bytes);
++    self.initial_snapshot = null;
++}
+diff --git a/src/termio/Termio.zig b/src/termio/Termio.zig
+index 7d6e179..a780a11 100644
+--- a/src/termio/Termio.zig
++++ b/src/termio/Termio.zig
+@@ -225 +225,20 @@ pub const DerivedConfig = struct {
+-pub fn init(self: *Termio, alloc: Allocator, opts: termio.Options) !void {
++pub fn init(self: *Termio, alloc: Allocator, opts_: termio.Options) !void {
++    var opts = opts_;
++    defer opts.deinit(alloc);
++    errdefer opts.config.deinit();
++
++    // Decode the complete snapshot before the backend is entered. This keeps
++    // restored state ahead of any live output and leaves the caller with a
++    // clean construction failure for invalid snapshot bytes.
++    var decoded: ?terminalpkg.snapshot.Decoded = null;
++    if (opts.initial_snapshot) |bytes| {
++        var source: std.Io.Reader = .fixed(bytes);
++        decoded = try terminalpkg.snapshot.decodeExact(
++            alloc,
++            global.io(),
++            &source,
++            .{ .max_continuation_bytes = terminalpkg.apc.Protocol.maxDefaultBytes() },
++        );
++    }
++    defer if (decoded) |*value| value.deinit(alloc);
++
+@@ -243,18 +262,24 @@ pub fn init(self: *Termio, alloc: Allocator, opts: termio.Options) !void {
+-    // Create our terminal
+-    var term = try terminalpkg.Terminal.init(global.io(), alloc, opts: {
+-        const grid_size = opts.size.grid();
+-        break :opts .{
+-            .cols = grid_size.columns,
+-            .rows = grid_size.rows,
+-            .max_scrollback_bytes = opts.full_config.@"scrollback-limit-bytes".optional(),
+-            .max_scrollback_lines = opts.full_config.@"scrollback-limit-lines".optional(),
+-            .default_modes = default_modes,
+-            .default_cursor_style = opts.config.cursor_style,
+-            .default_cursor_blink = opts.config.cursor_blink,
+-            .colors = .{
+-                .background = .init(opts.config.background.toTerminalRGB()),
+-                .foreground = .init(opts.config.foreground.toTerminalRGB()),
+-                .cursor = cursor: {
+-                    const color = opts.config.cursor_color orelse break :cursor .unset;
+-                    const rgb = color.toTerminalRGB() orelse break :cursor .unset;
+-                    break :cursor .init(rgb);
++    // Create our terminal, or transfer the decoded terminal into its final
++    // owner. The latter must happen before the persistent stream is attached.
++    var term = if (decoded) |*value| value.toOwned() else try terminalpkg.Terminal.init(
++        global.io(),
++        alloc,
++        opts: {
++            const grid_size = opts.size.grid();
++            break :opts .{
++                .cols = grid_size.columns,
++                .rows = grid_size.rows,
++                .max_scrollback_bytes = opts.full_config.@"scrollback-limit-bytes".optional(),
++                .max_scrollback_lines = opts.full_config.@"scrollback-limit-lines".optional(),
++                .default_modes = default_modes,
++                .default_cursor_style = opts.config.cursor_style,
++                .default_cursor_blink = opts.config.cursor_blink,
++                .colors = .{
++                    .background = .init(opts.config.background.toTerminalRGB()),
++                    .foreground = .init(opts.config.foreground.toTerminalRGB()),
++                    .cursor = cursor: {
++                        const color = opts.config.cursor_color orelse break :cursor .unset;
++                        const rgb = color.toTerminalRGB() orelse break :cursor .unset;
++                        break :cursor .init(rgb);
++                    },
++                    .palette = .init(opts.config.palette),
+@@ -262,6 +287,5 @@ pub fn init(self: *Termio, alloc: Allocator, opts: termio.Options) !void {
+-                .palette = .init(opts.config.palette),
+-            },
+-            .kitty_image_storage_limit = opts.config.image_storage_limit,
+-            .kitty_image_loading_limits = .allWithTempDir(global.tmpDirPath()),
+-        };
+-    });
++                .kitty_image_storage_limit = opts.config.image_storage_limit,
++                .kitty_image_loading_limits = .allWithTempDir(global.tmpDirPath()),
++            };
++        },
++    );
+@@ -271,2 +295,4 @@ pub fn init(self: *Termio, alloc: Allocator, opts: termio.Options) !void {
+-    term.width_px = term.cols * opts.size.cell.width;
+-    term.height_px = term.rows * opts.size.cell.height;
++    if (decoded == null) {
++        term.width_px = term.cols * opts.size.cell.width;
++        term.height_px = term.rows * opts.size.cell.height;
++    }
+@@ -312,0 +339 @@ pub fn init(self: *Termio, alloc: Allocator, opts: termio.Options) !void {
++            .continuation_max_bytes = terminalpkg.apc.Protocol.maxDefaultBytes(),
+@@ -315,0 +343,12 @@ pub fn init(self: *Termio, alloc: Allocator, opts: termio.Options) !void {
++
++    // Replay the decoder-provided continuation exactly once after the stream
++    // has reached its final address. The decoder defer then releases only its
++    // continuation bytes.
++    if (decoded) |*value| {
++        switch (value.continuation) {
++            .ground => {},
++            .bytes => |bytes| self.terminal_stream.nextSlice(bytes),
++        }
++        value.deinit(alloc);
++        decoded = null;
++    }
+@@ -408,0 +448,18 @@ pub fn queueMessage(
++/// Queue a message without waiting for mailbox capacity. This is used by
++/// asynchronous embedded requests whose caller must never block. A full
++/// mailbox cancels the request through Message.deinit.
++pub fn queueMessageNonBlocking(self: *Termio, msg: termio.Message) void {
++    switch (self.mailbox) {
++        .spsc => |*mailbox| {
++            if (mailbox.queue.push(global.io(), msg, .{ .instant = {} }) == 0) {
++                msg.deinit();
++                return;
++            }
++
++            mailbox.wakeup.notify() catch |err| {
++                log.warn("failed to notify writer for nonblocking message err={}", .{err});
++            };
++        },
++    }
++}
++
+@@ -654,0 +712,45 @@ pub fn processOutput(self: *Termio, buf: []const u8) void {
++/// Encode the complete terminal and its persistent stream continuation. This
++/// is called by the IO thread with terminal state serialized by the renderer
++/// mutex; the callback runs only after that lock has been released.
++pub fn snapshot(
++    self: *Termio,
++    callback: termio.Message.SnapshotCallback,
++    userdata: ?*anyopaque,
++) void {
++    var encoded: std.Io.Writer.Allocating = .init(self.alloc);
++    var status: termio.Message.SnapshotStatus = .success;
++
++    {
++        self.renderer_state.mutex.lockUncancelable(global.io());
++        defer self.renderer_state.mutex.unlock(global.io());
++
++        var continuation: std.Io.Writer.Allocating = .init(self.alloc);
++        defer continuation.deinit();
++
++        self.terminal_stream.writeContinuation(&continuation.writer) catch |err| {
++            log.warn("failed to encode terminal continuation err={}", .{err});
++            status = .error_status;
++        };
++
++        if (status == .success) snapshot_encode: {
++            terminalpkg.snapshot.encode(
++                self.alloc,
++                &encoded.writer,
++                &self.terminal,
++                .{ .continuation = .{ .bytes = continuation.written() } },
++            ) catch |err| {
++                log.warn("failed to encode terminal snapshot err={}", .{err});
++                status = .error_status;
++                break :snapshot_encode;
++            };
++        }
++    }
++
++    if (status == .success) {
++        callback(userdata, .success, encoded.written().ptr, encoded.written().len);
++    } else {
++        callback(userdata, status, null, 0);
++    }
++    encoded.deinit();
++}
++
+diff --git a/src/termio/Thread.zig b/src/termio/Thread.zig
+index 6b860a0..287df92 100644
+--- a/src/termio/Thread.zig
++++ b/src/termio/Thread.zig
+@@ -19 +18,0 @@ const xev = global.xev;
+-const crash = @import("../crash/main.zig");
+@@ -247,7 +245,0 @@ fn threadMain_(self: *Thread, io: *termio.Termio) !void {
+-    // Setup our crash metadata
+-    crash.sentry.thread_state = .{
+-        .type = .io,
+-        .surface = io.surface_mailbox.surface,
+-    };
+-    defer crash.sentry.thread_state = null;
+-
+@@ -359,0 +352,7 @@ fn drainMailbox(
++            .process_output_small => |v| io.processOutput(v.data[0..v.len]),
++            .process_output_stable => |v| io.processOutput(v),
++            .process_output_alloc => |v| {
++                defer v.alloc.free(v.data);
++                io.processOutput(v.data);
++            },
++            .snapshot_request => |v| io.snapshot(v.callback, v.userdata),
 diff --git a/src/termio/backend.zig b/src/termio/backend.zig
-index c29009acb..341aae87e 100644
+index c29009a..341aae8 100644
 --- a/src/termio/backend.zig
 +++ b/src/termio/backend.zig
-@@ -11,28 +11,32 @@ const ProcessInfo = @import("../pty.zig").ProcessInfo;
- const WRITE_REQ_PREALLOC = std.math.pow(usize, 2, 5);
- 
- /// The kinds of backends.
+@@ -14 +14 @@ const WRITE_REQ_PREALLOC = std.math.pow(usize, 2, 5);
 -pub const Kind = enum { exec };
 +pub const Kind = enum { exec, host };
- 
- /// Configuration for the various backend types.
- pub const Config = union(Kind) {
-     /// Exec uses posix exec to run a command with a pty.
-     exec: termio.Exec.Config,
+@@ -19,0 +20 @@ pub const Config = union(Kind) {
 +    host: termio.Host.Config,
- };
- 
- /// Backend implementations. A backend is responsible for owning the pty
- /// behavior and providing read/write capabilities.
- pub const Backend = union(Kind) {
-     exec: termio.Exec,
+@@ -25,0 +27 @@ pub const Backend = union(Kind) {
 +    host: termio.Host,
- 
-     pub fn deinit(self: *Backend) void {
-         switch (self.*) {
-             .exec => |*exec| exec.deinit(),
+@@ -29,0 +32 @@ pub const Backend = union(Kind) {
 +            .host => |*host| host.deinit(),
-         }
-     }
- 
-     pub fn initTerminal(self: *Backend, t: *terminal.Terminal) void {
-         switch (self.*) {
-             .exec => |*exec| exec.initTerminal(t),
+@@ -35,0 +39 @@ pub const Backend = union(Kind) {
 +            .host => |*host| host.initTerminal(t),
-         }
-     }
- 
-@@ -44,12 +48,14 @@ pub const Backend = union(Kind) {
-     ) !void {
-         switch (self.*) {
-             .exec => |*exec| try exec.threadEnter(alloc, io, td),
+@@ -46,0 +51 @@ pub const Backend = union(Kind) {
 +            .host => |*host| try host.threadEnter(alloc, io, td),
-         }
-     }
- 
-     pub fn threadExit(self: *Backend, td: *termio.Termio.ThreadData) void {
-         switch (self.*) {
-             .exec => |*exec| exec.threadExit(td),
+@@ -52,0 +58 @@ pub const Backend = union(Kind) {
 +            .host => |*host| host.threadExit(td),
-         }
-     }
- 
-@@ -60,6 +66,7 @@ pub const Backend = union(Kind) {
-     ) !void {
-         switch (self.*) {
-             .exec => |*exec| try exec.focusGained(td, focused),
+@@ -62,0 +69 @@ pub const Backend = union(Kind) {
 +            .host => |*host| try host.focusGained(td, focused),
-         }
-     }
- 
-@@ -70,6 +77,7 @@ pub const Backend = union(Kind) {
-     ) !void {
-         switch (self.*) {
-             .exec => |*exec| try exec.resize(grid_size, screen_size),
+@@ -72,0 +80 @@ pub const Backend = union(Kind) {
 +            .host => |*host| try host.resize(grid_size, screen_size),
-         }
-     }
- 
-@@ -82,6 +90,7 @@ pub const Backend = union(Kind) {
-     ) !void {
-         switch (self.*) {
-             .exec => |*exec| try exec.queueWrite(alloc, td, data, linefeed),
+@@ -84,0 +93 @@ pub const Backend = union(Kind) {
 +            .host => |*host| try host.queueWrite(alloc, td, data, linefeed),
-         }
-     }
- 
-@@ -99,6 +108,12 @@ pub const Backend = union(Kind) {
-                 exit_code,
-                 runtime_ms,
-             ),
+@@ -101,0 +111,6 @@ pub const Backend = union(Kind) {
 +            .host => |*host| try host.childExitedAbnormally(
 +                gpa,
 +                t,
 +                exit_code,
 +                runtime_ms,
 +            ),
-         }
-     }
- 
-@@ -108,6 +123,7 @@ pub const Backend = union(Kind) {
-     pub fn getProcessInfo(self: *Backend, comptime info: ProcessInfo) ?ProcessInfo.Type(info) {
-         return switch (self.*) {
-             .exec => |*exec| exec.getProcessInfo(info),
+@@ -110,0 +126 @@ pub const Backend = union(Kind) {
 +            .host => |*host| host.getProcessInfo(info),
-         };
-     }
- };
-@@ -115,10 +131,12 @@ pub const Backend = union(Kind) {
- /// Termio thread data. See termio.ThreadData for docs.
- pub const ThreadData = union(Kind) {
-     exec: termio.Exec.ThreadData,
+@@ -117,0 +134 @@ pub const ThreadData = union(Kind) {
 +    host: termio.Host.ThreadData,
- 
-     pub fn deinit(self: *ThreadData, alloc: Allocator) void {
-         switch (self.*) {
-             .exec => |*exec| exec.deinit(alloc),
+@@ -121,0 +139 @@ pub const ThreadData = union(Kind) {
 +            .host => |*host| host.deinit(alloc),
-         }
-     }
- 
+diff --git a/src/termio/message.zig b/src/termio/message.zig
+index e51865e..e0c2efd 100644
+--- a/src/termio/message.zig
++++ b/src/termio/message.zig
+@@ -18,0 +19,16 @@ pub const Message = union(enum) {
++    /// The callback invoked for an asynchronous snapshot request.
++    pub const SnapshotStatus = enum(c_int) {
++        success = 0,
++        error_status = 1,
++        cancelled = 2,
++    };
++
++    pub const SnapshotCallback = *const fn (
++        ?*anyopaque,
++        SnapshotStatus,
++        ?[*]const u8,
++        usize,
++    ) callconv(.c) void;
++
++    pub const ProcessOutputReq = MessageData(u8, 38);
++
+@@ -93,0 +110,16 @@ pub const Message = union(enum) {
++    /// Process host-owned output on the IO thread, in FIFO order with other
++    /// embedded surface messages.
++    process_output_small: ProcessOutputReq.Small,
++
++    /// Process stable host-owned output on the IO thread.
++    process_output_stable: ProcessOutputReq.Stable,
++
++    /// Process allocated host-owned output on the IO thread.
++    process_output_alloc: ProcessOutputReq.Alloc,
++
++    /// Encode a snapshot on the IO thread and invoke the callback exactly once.
++    snapshot_request: struct {
++        callback: SnapshotCallback,
++        userdata: ?*anyopaque,
++    },
++
+@@ -104,0 +137,9 @@ pub const Message = union(enum) {
++    /// Return a message for host output, copying data when needed.
++    pub fn processOutputReq(alloc: Allocator, data: []const u8) !Message {
++        return switch (try ProcessOutputReq.init(alloc, data)) {
++            .stable => unreachable,
++            .small => |v| Message{ .process_output_small = v },
++            .alloc => |v| Message{ .process_output_alloc = v },
++        };
++    }
++
+@@ -113,0 +155,7 @@ pub const Message = union(enum) {
++            .process_output_alloc => |v| v.alloc.free(v.data),
++            .snapshot_request => |v| v.callback(
++                v.userdata,
++                .cancelled,
++                null,
++                0,
++            ),
+@@ -130,0 +179,26 @@ test {
++
++test "snapshot request cancellation invokes callback exactly once" {
++    const State = struct {
++        var count: usize = 0;
++
++        fn callback(
++            _: ?*anyopaque,
++            status: Message.SnapshotStatus,
++            bytes: ?[*]const u8,
++            len: usize,
++        ) callconv(.c) void {
++            std.testing.expectEqual(.cancelled, status) catch @panic("unexpected status");
++            std.testing.expect(bytes == null) catch @panic("unexpected bytes");
++            std.testing.expectEqual(@as(usize, 0), len) catch @panic("unexpected length");
++            count += 1;
++        }
++    };
++
++    State.count = 0;
++    const message: Message = .{ .snapshot_request = .{
++        .callback = &State.callback,
++        .userdata = null,
++    } };
++    message.deinit();
++    try std.testing.expectEqual(@as(usize, 1), State.count);
++}
 diff --git a/src/termio/Host.zig b/src/termio/Host.zig
 new file mode 100644
-index 000000000..e11f52ae3
 --- /dev/null
 +++ b/src/termio/Host.zig
 @@ -0,0 +1,128 @@

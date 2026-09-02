@@ -11,6 +11,8 @@ GHOSTTY_REPO="${GHOSTTY_REPO:-git@github.com:FauxFoxIO/ghostty.git}"
 GHOSTTY_REF="${GHOSTTY_REF:-d71bcd105abafd03a5da4cb389219e4ecae01b07}"
 GHOSTTY_OPTIMIZE="${GHOSTTY_OPTIMIZE:-ReleaseFast}"
 GHOSTTY_PATCH_DIR="${GHOSTTY_PATCH_DIR:-${REPO_ROOT}/patches/ghostty/0.1.6-zig016}"
+GHOSTTYKIT_INSTALL_DIR="${GHOSTTYKIT_INSTALL_DIR:-${REPO_ROOT}/vendor/ghostty/macos}"
+GHOSTTYKIT_METADATA_PATH="${GHOSTTYKIT_METADATA_PATH:-${REPO_ROOT}/vendor/ghosttykit-metadata.json}"
 ZIG="${ZIG:-zig}"
 SHOULD_FETCH=0
 
@@ -31,6 +33,8 @@ Env:
   GHOSTTY_REF
   GHOSTTY_OPTIMIZE
   GHOSTTY_PATCH_DIR
+  GHOSTTYKIT_INSTALL_DIR   Directory receiving GhosttyKit.xcframework (default: ${GHOSTTYKIT_INSTALL_DIR})
+  GHOSTTYKIT_METADATA_PATH Metadata output path (default: ${GHOSTTYKIT_METADATA_PATH})
   ZIG                 Zig 0.16 executable (default: ${ZIG})
 EOF
 }
@@ -60,15 +64,15 @@ apply_patches() {
   fi
 
   for patch in "${patches[@]}"; do
-    if git -C "${GHOSTTY_DIR}" apply --reverse --check "${patch}" >/dev/null 2>&1; then
+    if git -C "${GHOSTTY_DIR}" apply --unidiff-zero --reverse --check "${patch}" >/dev/null 2>&1; then
       echo "Patch already applied: $(basename "${patch}")"
       continue
     fi
-    if ! git -C "${GHOSTTY_DIR}" apply --check "${patch}"; then
+    if ! git -C "${GHOSTTY_DIR}" apply --unidiff-zero --check "${patch}"; then
       echo "error: patch does not apply cleanly: ${patch}" >&2
       exit 1
     fi
-    git -C "${GHOSTTY_DIR}" apply "${patch}"
+    git -C "${GHOSTTY_DIR}" apply --unidiff-zero "${patch}"
     echo "Applied patch: $(basename "${patch}")"
   done
 }
@@ -156,7 +160,11 @@ apply_patches
     -Dxcframework-target=universal
 )
 
-"${REPO_ROOT}/scripts/install-ghosttykit.sh" "${GHOSTTY_DIR}/macos/GhosttyKit.xcframework"
-"${REPO_ROOT}/scripts/verify-ghosttykit.sh"
+GHOSTTYKIT_INSTALL_DIR="${GHOSTTYKIT_INSTALL_DIR}" \
+GHOSTTYKIT_METADATA_PATH="${GHOSTTYKIT_METADATA_PATH}" \
+  "${REPO_ROOT}/scripts/install-ghosttykit.sh" "${GHOSTTY_DIR}/macos/GhosttyKit.xcframework"
+GHOSTTYKIT_INSTALL_DIR="${GHOSTTYKIT_INSTALL_DIR}" \
+  "${REPO_ROOT}/scripts/verify-ghosttykit.sh" \
+  "${GHOSTTYKIT_INSTALL_DIR}/GhosttyKit.xcframework"
 
 echo "Built GhosttyKit from $(git -C "${GHOSTTY_DIR}" rev-parse --short HEAD)"

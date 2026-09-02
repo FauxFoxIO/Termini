@@ -8,8 +8,8 @@ set -euo pipefail
 
 XCFRAMEWORK_PATH="${1:-${GHOSTTYKIT_PATH:-}}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEST_DIR="${REPO_ROOT}/vendor/ghostty/macos"
-METADATA_PATH="${REPO_ROOT}/vendor/ghosttykit-metadata.json"
+DEST_DIR="${GHOSTTYKIT_INSTALL_DIR:-${REPO_ROOT}/vendor/ghostty/macos}"
+METADATA_PATH="${GHOSTTYKIT_METADATA_PATH:-${REPO_ROOT}/vendor/ghosttykit-metadata.json}"
 
 find_git_root() {
   local dir="$1"

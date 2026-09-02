@@ -4,7 +4,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-XCFRAMEWORK_PATH="${1:-${REPO_ROOT}/vendor/ghostty/macos/GhosttyKit.xcframework}"
+XCFRAMEWORK_PATH="${1:-${GHOSTTYKIT_INSTALL_DIR:-${REPO_ROOT}/vendor/ghostty/macos}/GhosttyKit.xcframework}"
 
 if [[ ! -d "${XCFRAMEWORK_PATH}" ]]; then
   echo "error: '${XCFRAMEWORK_PATH}' does not exist or is not a directory" >&2
@@ -97,6 +97,7 @@ required_apis=(
   ghostty_surface_key
   ghostty_surface_text
   ghostty_surface_process_output
+  ghostty_surface_request_snapshot
   ghostty_surface_mouse_button
   ghostty_surface_mouse_pos
   ghostty_surface_mouse_scroll
@@ -106,11 +107,24 @@ required_apis=(
   ghostty_surface_free_text
 )
 
+required_snapshot_declarations=(
+  ghostty_surface_snapshot_status_e
+  ghostty_surface_snapshot_cb
+  initial_snapshot
+  initial_snapshot_len
+)
+
 for header in "${XCFRAMEWORK_PATH}"/*/Headers/ghostty.h; do
   [[ -f "${header}" ]] || continue
   for api in "${required_apis[@]}"; do
     if ! /usr/bin/grep -Eq "GHOSTTY_API.*${api}[[:space:]]*\\(" "${header}"; then
       echo "error: $(dirname "${header}") is missing required declaration ${api}" >&2
+      exit 1
+    fi
+  done
+  for declaration in "${required_snapshot_declarations[@]}"; do
+    if ! /usr/bin/grep -Eq "${declaration}" "${header}"; then
+      echo "error: $(dirname "${header}") is missing required snapshot declaration ${declaration}" >&2
       exit 1
     fi
   done

@@ -60,7 +60,8 @@ final class TerminiScrollingSurfaceBackgroundTests: XCTestCase {
             controller: nil,
             appearance: .init(theme: .midnightBloom),
             isRenderVisible: true,
-            surfaceBackground: .transparent
+            surfaceBackground: .transparent,
+            contentInsets: .zero
         )
         let surface = surface(in: container)
 
@@ -121,7 +122,9 @@ final class TerminiScrollingSurfaceBackgroundTests: XCTestCase {
             controller: nil,
             showsSystemKeyboard: true,
             appearance: .init(theme: .midnightBloom),
-            surfaceBackground: .transparent
+            surfaceBackground: .transparent,
+            isRenderVisible: true,
+            contentInsets: .zero
         )
         let surface = surface(in: container)
 
