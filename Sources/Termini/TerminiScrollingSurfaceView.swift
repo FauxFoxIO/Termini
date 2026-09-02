@@ -191,7 +191,6 @@ public final class TerminiScrollingContainerView: UIScrollView, UIScrollViewDele
         surface.showsSystemKeyboard = showsSystemKeyboard
         surface.surfaceBackground = surfaceBackground
         surface.terminalAppearance = appearance
-        surface.isRenderVisible = isRenderVisible
         if previousSurface !== surface {
             previousSurface?.removeFromSuperview()
         }
