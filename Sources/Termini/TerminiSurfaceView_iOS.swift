@@ -58,6 +58,7 @@ public struct TerminiSurfaceView: UIViewRepresentable {
     private let controller: TerminiTerminalController?
     private let showsSystemKeyboard: Bool
     private let appearance: TerminiTerminalAppearance
+    private let isRenderVisible: Bool
     private let surfaceBackground: TerminiSurfaceBackground
 
     public init(
@@ -70,6 +71,7 @@ public struct TerminiSurfaceView: UIViewRepresentable {
         self.controller = controller
         self.showsSystemKeyboard = showsSystemKeyboard
         self.appearance = appearance
+        self.isRenderVisible = isRenderVisible
         self.surfaceBackground = surfaceBackground
     }
 
@@ -110,6 +112,7 @@ public struct TerminiSurfaceView: UIViewRepresentable {
         }
         view.showsSystemKeyboard = showsSystemKeyboard
         view.terminalAppearance = appearance
+        view.isRenderVisible = isRenderVisible
         view.bind(controller: controller)
         return view
     }
@@ -131,6 +134,7 @@ public struct TerminiSurfaceView: UIViewRepresentable {
         uiView.showsSystemKeyboard = showsSystemKeyboard
         uiView.surfaceBackground = surfaceBackground
         uiView.terminalAppearance = appearance
+        uiView.isRenderVisible = isRenderVisible
         uiView.bind(controller: controller)
     }
 
@@ -154,8 +158,11 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
     private var restoredInitialSnapshot = false
     private var pendingOutput = Data()
     private var renderLink: CADisplayLink?
+    private var scrollVisibilityObservations: [NSKeyValueObservation] = []
     private weak var controller: TerminiTerminalController?
     private var isHostAttached = true
+    private var isVisibleInViewHierarchy = false
+    private var needsDrawOnReveal = false
     private var inputEnabled = true
     private let repeatCoordinator = TerminiHardwareKeyRepeatCoordinator()
     private var forwardedKeys: [UInt16: TerminiHardwareKeyDescriptor] = [:]
@@ -208,6 +215,22 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
             guard oldValue != showsSystemKeyboard else { return }
             reloadInputViews()
         }
+    }
+    /// The host's logical visibility gate. UIKit hierarchy visibility is
+    /// applied separately so surfaces outside a scrolling viewport also idle.
+    var isRenderVisible = true {
+        didSet {
+            guard oldValue != isRenderVisible else { return }
+            updateRenderScheduling()
+        }
+    }
+
+    private var canRender: Bool {
+        isHostAttached
+            && isRenderVisible
+            && isVisibleInViewHierarchy
+            && window != nil
+            && surface != nil
     }
 
     public var hasText: Bool { true }
@@ -275,22 +298,20 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
 
     public override func didMoveToWindow() {
         super.didMoveToWindow()
+        rebuildScrollVisibilityObservations()
         if window == nil {
             isHostAttached = false
             releaseForwardedKeys()
             setSurfaceFocus(false)
-            if let surface {
-                ghostty_surface_set_occlusion(surface, false)
-            }
-            renderLink?.invalidate()
-            renderLink = nil
+            updateHierarchyVisibility()
+            updateRenderScheduling()
             return
         }
         isHostAttached = true
         createSurfaceIfNeeded()
         synchronizeGhosttyLayerGeometry()
         updateSurfaceSize()
-        startRenderLoopIfNeeded()
+        updateHierarchyVisibility()
         if controller == nil {
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -301,10 +322,16 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
         }
     }
 
+    public override func didMoveToSuperview() {
+        super.didMoveToSuperview()
+        rebuildScrollVisibilityObservations()
+    }
+
     public override func layoutSubviews() {
         super.layoutSubviews()
         synchronizeGhosttyLayerGeometry()
         updateSurfaceSize()
+        updateHierarchyVisibility()
     }
 
     public override var canBecomeFirstResponder: Bool { true }
@@ -339,30 +366,25 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
 
     func prepareForHostAttachment() {
         isHostAttached = true
-        if let surface {
-            ghostty_surface_set_occlusion(surface, window != nil)
-        }
         if window != nil {
             createSurfaceIfNeeded()
             synchronizeGhosttyLayerGeometry()
             updateSurfaceSize()
-            startRenderLoopIfNeeded()
+            updateHierarchyVisibility()
             restoreFocusIfNeeded()
+        } else {
+            updateRenderScheduling()
         }
     }
 
     func detachFromHost() {
         isHostAttached = false
         releaseForwardedKeys()
-        if let surface {
-            ghostty_surface_set_occlusion(surface, false)
-        }
         setSurfaceFocus(false)
         if isFirstResponder {
             _ = resignFirstResponder()
         }
-        renderLink?.invalidate()
-        renderLink = nil
+        updateRenderScheduling()
         removeFromSuperview()
     }
 
@@ -470,7 +492,7 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
     }
 
     private func startRenderLoopIfNeeded() {
-        guard renderLink == nil else { return }
+        guard canRender, renderLink == nil else { return }
         let link = CADisplayLink(target: self, selector: #selector(drawFrame))
         link.add(to: .main, forMode: .common)
         renderLink = link
@@ -478,8 +500,80 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
 
     @objc
     private func drawFrame() {
-        guard isHostAttached, let surface else { return }
+        guard canRender, let surface else { return }
         ghostty_surface_draw(surface)
+    }
+
+    private func stopRenderLoop() {
+        renderLink?.invalidate()
+        renderLink = nil
+    }
+
+    private func updateRenderScheduling() {
+        if let surface {
+            ghostty_surface_set_occlusion(surface, canRender)
+        }
+        guard canRender else {
+            stopRenderLoop()
+            return
+        }
+        if needsDrawOnReveal, let surface {
+            needsDrawOnReveal = false
+            ghostty_surface_refresh(surface)
+            ghostty_surface_draw(surface)
+        }
+        startRenderLoopIfNeeded()
+    }
+
+    private func drawOrDefer(_ surface: ghostty_surface_t) {
+        if canRender {
+            ghostty_surface_draw(surface)
+        } else {
+            needsDrawOnReveal = true
+        }
+    }
+
+    /// SwiftUI keeps views mounted outside a scroll viewport. Observe ancestor
+    /// scroll bounds without taking over their delegates, and reduce those
+    /// changes to a Boolean render gate.
+    private func rebuildScrollVisibilityObservations() {
+        scrollVisibilityObservations.removeAll()
+        var ancestor = superview
+        while let view = ancestor {
+            if let scrollView = view as? UIScrollView {
+                scrollVisibilityObservations.append(
+                    scrollView.observe(\.bounds, options: [.new]) { [weak self] _, _ in
+                        self?.updateHierarchyVisibility()
+                    }
+                )
+            }
+            ancestor = view.superview
+        }
+        updateHierarchyVisibility()
+    }
+
+    private func updateHierarchyVisibility() {
+        let visible = isActuallyVisibleInHierarchy
+        guard visible != isVisibleInViewHierarchy else { return }
+        isVisibleInViewHierarchy = visible
+        updateRenderScheduling()
+    }
+
+    private var isActuallyVisibleInHierarchy: Bool {
+        guard let window, !bounds.isEmpty, !isHidden, alpha > 0.01 else { return false }
+
+        var ancestor = superview
+        while let view = ancestor {
+            guard !view.isHidden, view.alpha > 0.01 else { return false }
+            if view.clipsToBounds {
+                let frameInAncestor = convert(bounds, to: view)
+                guard !frameInAncestor.intersection(view.bounds).isEmpty else { return false }
+            }
+            ancestor = view.superview
+        }
+
+        let frameInWindow = convert(bounds, to: window)
+        return !frameInWindow.intersection(window.bounds).isEmpty
     }
 
     func bind(controller: TerminiTerminalController?) {
@@ -561,6 +655,7 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
         restoredInitialSnapshot = restored
         surface = created
         runtime.registerSurface(created, view: self)
+        ghostty_surface_set_occlusion(created, canRender)
         // `font_size` is part of the surface creation config, so it is already
         // active in the initial Ghostty font grid. Treat it as applied here to
         // avoid immediately replacing that grid with an identical one. Older
@@ -575,7 +670,8 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
         setSurfaceFocus(controller == nil || controller?.shouldRestoreFocus() == true)
         updateSurfaceSize()
         ghostty_surface_refresh(created)
-        ghostty_surface_draw(created)
+        drawOrDefer(created)
+        updateRenderScheduling()
         reportSizeIfNeeded()
         reportDiagnostics()
         scheduleInitialAppearance()
@@ -612,7 +708,7 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
         let height = UInt32(bounds.height * scale)
         ghostty_surface_set_size(surface, width, height)
         ghostty_surface_refresh(surface)
-        ghostty_surface_draw(surface)
+        drawOrDefer(surface)
         reportSizeIfNeeded()
         reportDiagnostics()
     }
@@ -686,7 +782,7 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
             ghostty_surface_process_output(surface, ptr, UInt(data.count))
         }
         ghostty_surface_refresh(surface)
-        ghostty_surface_draw(surface)
+        drawOrDefer(surface)
         reportDiagnostics()
     }
 
@@ -726,7 +822,7 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
             }
 
             ghostty_surface_refresh(surface)
-            ghostty_surface_draw(surface)
+            drawOrDefer(surface)
             reportSizeIfNeeded()
             reportDiagnostics()
         }
@@ -840,9 +936,9 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.applyBindingAction(action)
-            guard self.surface != nil else { return }
-            ghostty_surface_refresh(self.surface)
-            ghostty_surface_draw(self.surface)
+            guard let surface = self.surface else { return }
+            ghostty_surface_refresh(surface)
+            self.drawOrDefer(surface)
             self.reportSizeIfNeeded()
             self.reportDiagnostics()
         }
