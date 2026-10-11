@@ -14,6 +14,8 @@ GHOSTTY_PATCH_DIR="${GHOSTTY_PATCH_DIR:-${REPO_ROOT}/patches/ghostty/0.1.6-zig01
 GHOSTTYKIT_INSTALL_DIR="${GHOSTTYKIT_INSTALL_DIR:-${REPO_ROOT}/vendor/ghostty/macos}"
 GHOSTTYKIT_METADATA_PATH="${GHOSTTYKIT_METADATA_PATH:-${REPO_ROOT}/vendor/ghosttykit-metadata.json}"
 ZIG="${ZIG:-zig}"
+GHOSTTY_BUILD_ROOT="${GHOSTTY_BUILD_ROOT:-${HOME}/Library/Caches/Termini/GhosttyKit}"
+GHOSTTYKIT_BUILD_PATH="${GHOSTTY_BUILD_ROOT}/GhosttyKit.xcframework"
 SHOULD_FETCH=0
 
 usage() {
@@ -35,6 +37,7 @@ Env:
   GHOSTTY_PATCH_DIR
   GHOSTTYKIT_INSTALL_DIR   Directory receiving GhosttyKit.xcframework (default: ${GHOSTTYKIT_INSTALL_DIR})
   GHOSTTYKIT_METADATA_PATH Metadata output path (default: ${GHOSTTYKIT_METADATA_PATH})
+  GHOSTTY_BUILD_ROOT   External build output and dependency caches (default: ${GHOSTTY_BUILD_ROOT})
   ZIG                 Zig 0.16 executable (default: ${ZIG})
 EOF
 }
@@ -148,10 +151,16 @@ ensure_checkout
 update_checkout
 apply_patches
 
+mkdir -p "${GHOSTTY_BUILD_ROOT}"
 (
   cd "${GHOSTTY_DIR}"
   # Embedded libraries must not install a process-wide crash handler; the host owns that policy.
   "${ZIG}" build \
+    --cache-dir "${GHOSTTY_BUILD_ROOT}/ZigCache" \
+    --global-cache-dir "${GHOSTTY_BUILD_ROOT}/ZigGlobalCache" \
+    --prefix "${GHOSTTY_BUILD_ROOT}/ZigOut" \
+    -Dxcframework-output-path="${GHOSTTYKIT_BUILD_PATH}" \
+    -Dprivate-macos-apis=false \
     -Dapp-runtime=none \
     -Demit-xcframework=true \
     -Demit-macos-app=false \
@@ -162,7 +171,8 @@ apply_patches
 
 GHOSTTYKIT_INSTALL_DIR="${GHOSTTYKIT_INSTALL_DIR}" \
 GHOSTTYKIT_METADATA_PATH="${GHOSTTYKIT_METADATA_PATH}" \
-  "${REPO_ROOT}/scripts/install-ghosttykit.sh" "${GHOSTTY_DIR}/macos/GhosttyKit.xcframework"
+GHOSTTY_SOURCE_DIR="${GHOSTTY_DIR}" \
+  "${REPO_ROOT}/scripts/install-ghosttykit.sh" "${GHOSTTYKIT_BUILD_PATH}"
 GHOSTTYKIT_INSTALL_DIR="${GHOSTTYKIT_INSTALL_DIR}" \
   "${REPO_ROOT}/scripts/verify-ghosttykit.sh" \
   "${GHOSTTYKIT_INSTALL_DIR}/GhosttyKit.xcframework"

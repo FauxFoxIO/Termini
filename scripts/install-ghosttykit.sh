@@ -3,6 +3,8 @@
 # Usage:
 #   scripts/install-ghosttykit.sh /path/to/GhosttyKit.xcframework
 # or set GHOSTTYKIT_PATH=/path/to/GhosttyKit.xcframework
+# Set GHOSTTY_SOURCE_DIR=/path/to/ghostty for artifacts outside the checkout.
+# Without it, the source checkout is inferred from the artifact ancestors.
 
 set -euo pipefail
 
@@ -100,10 +102,18 @@ normalize_swiftpm_library_names() {
     "${xcframework_dir}/Info.plist"
 }
 
+if [[ -n "${GHOSTTY_SOURCE_DIR:-}" ]]; then
+  SOURCE_GIT_ROOT="$(git -C "${GHOSTTY_SOURCE_DIR}" rev-parse --show-toplevel)" || {
+    echo "error: GHOSTTY_SOURCE_DIR is not a Git checkout: ${GHOSTTY_SOURCE_DIR}" >&2
+    exit 1
+  }
+else
+  SOURCE_GIT_ROOT="$(find_git_root "$(cd "$(dirname "${XCFRAMEWORK_PATH}")" && pwd)" || true)"
+fi
+
 mkdir -p "${DEST_DIR}"
 rsync -a --delete "${XCFRAMEWORK_PATH%/}/" "${DEST_DIR}/GhosttyKit.xcframework/"
 normalize_swiftpm_library_names "${DEST_DIR}/GhosttyKit.xcframework"
-SOURCE_GIT_ROOT="$(find_git_root "$(cd "$(dirname "${XCFRAMEWORK_PATH}")" && pwd)" || true)"
 write_metadata "${SOURCE_GIT_ROOT}"
 
 echo "Installed GhosttyKit.xcframework to ${DEST_DIR}"

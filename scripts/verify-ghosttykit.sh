@@ -5,6 +5,8 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 XCFRAMEWORK_PATH="${1:-${GHOSTTYKIT_INSTALL_DIR:-${REPO_ROOT}/vendor/ghostty/macos}/GhosttyKit.xcframework}"
+member_tmp_dir=""
+trap 'if [[ -n "${member_tmp_dir}" ]]; then rm -rf -- "${member_tmp_dir}"; fi' EXIT
 
 if [[ ! -d "${XCFRAMEWORK_PATH}" ]]; then
   echo "error: '${XCFRAMEWORK_PATH}' does not exist or is not a directory" >&2
@@ -137,6 +139,13 @@ for library in "${XCFRAMEWORK_PATH}"/*/*.a; do
   # Crashpad. In particular, do not reject ordinary prose or C++ names such
   # as std::...::sentry or dev-sentry.
   symbols="$(nm -a "${library}")"
+
+  # Embedding must remain App Store-safe, including unused exported entry points.
+  if private_api_evidence="$(grep -Em 5 '(^|[[:space:]])_?(CGSDefaultConnectionForThread|CGSSetWindowBackgroundBlurRadius)([[:space:]]|$)' <<< "${symbols}")"; then
+    echo "error: ${library} contains private macOS API symbol evidence:" >&2
+    echo "${private_api_evidence}" >&2
+    exit 1
+  fi
   if symbol_evidence="$(grep -Eim 5 '(^|[[:space:]])_?(sentry_[[:alnum:]_]+|google_breakpad|breakpad|crashpad)([[:space:]]|$)' <<< "${symbols}")"; then
     echo "error: ${library} contains forbidden Sentry/Breakpad/Crashpad symbol evidence:" >&2
     echo "${symbol_evidence}" >&2
@@ -155,13 +164,14 @@ for library in "${XCFRAMEWORK_PATH}"/*/*.a; do
     fi
   }
   if ! members="$(ar -t "${library}" 2>/dev/null)"; then
-    member_tmp_dir="$(mktemp -d /tmp/termini-ghosttykit-audit.XXXXXX)"
+    member_tmp_dir="$(mktemp -d "$(getconf DARWIN_USER_TEMP_DIR)termini-ghosttykit-audit.XXXXXX")"
     for architecture in $(lipo -archs "${library}"); do
       member_tmp="${member_tmp_dir}/${architecture}.a"
       lipo -thin "${architecture}" "${library}" -output "${member_tmp}"
       audit_members "${member_tmp}"
     done
     rm -rf "${member_tmp_dir}"
+    member_tmp_dir=""
   else
     audit_members "${library}"
   fi

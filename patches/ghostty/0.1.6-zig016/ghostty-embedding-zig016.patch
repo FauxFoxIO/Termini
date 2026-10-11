@@ -542,6 +542,17 @@ index a380dc5..7316373 100644
 +        surface_.core_surface.requestSnapshot(userdata, callback_);
 +    }
 +
+diff --git a/src/apprt/gtk/class/surface.zig b/src/apprt/gtk/class/surface.zig
+--- a/src/apprt/gtk/class/surface.zig
++++ b/src/apprt/gtk/class/surface.zig
+@@ -3553,6 +3553,7 @@
+             app.core(),
+             app.rt(),
+             &priv.rt_surface,
++            null,
+         ) catch |err| {
+             log.warn("failed to initialize surface err={}", .{err});
+             return error.SurfaceError;
 diff --git a/src/build/Config.zig b/src/build/Config.zig
 index 0527022..81fde2c 100644
 --- a/src/build/Config.zig

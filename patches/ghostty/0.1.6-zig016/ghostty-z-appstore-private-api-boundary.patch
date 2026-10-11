@@ -1,0 +1,286 @@
+diff --git a/src/build/Config.zig b/src/build/Config.zig
+index 81fde2cf3..e0d346ba0 100644
+--- a/src/build/Config.zig
++++ b/src/build/Config.zig
+@@ -20,6 +20,7 @@ const GitVersion = @import("GitVersion.zig");
+ optimize: std.builtin.OptimizeMode,
+ target: std.Build.ResolvedTarget,
+ xcframework_target: XCFrameworkTarget = .universal,
++xcframework_output_path: []const u8 = "macos/GhosttyKit.xcframework",
+ wasm_target: WasmTarget,
+ 
+ /// Comptime interfaces
+@@ -33,6 +34,8 @@ wayland: bool = false,
+ simd: bool = true,
+ i18n: bool = true,
+ wasm_shared: bool = true,
++/// Direct distributions retain radius-controlled blur; store artifacts use AppKit materials.
++private_macos_apis: bool = true,
+ 
+ /// Ghostty exe properties
+ exe_entrypoint: ExeEntrypoint = .ghostty,
+@@ -151,6 +154,17 @@ pub fn init(b: *std.Build, appVersion: []const u8, libVersion: []const u8) !Conf
+         "The target for the xcframework.",
+     ) orelse .universal;
+ 
++    config.xcframework_output_path = b.option(
++        []const u8,
++        "xcframework-output-path",
++        "The output path for the xcframework, including an absolute external path.",
++    ) orelse "macos/GhosttyKit.xcframework";
++    config.private_macos_apis = b.option(
++        bool,
++        "private-macos-apis",
++        "Use private macOS APIs for radius-controlled window blur (disable for App Store artifacts).",
++    ) orelse true;
++
+     //---------------------------------------------------------------
+     // Comptime Interfaces
+     config.font_backend = b.option(
+@@ -591,6 +605,7 @@ pub fn addOptions(self: *const Config, step: *std.Build.Step.Options) !void {
+     step.addOption(bool, "wayland", self.wayland);
+     step.addOption(bool, "simd", self.simd);
+     step.addOption(bool, "i18n", self.i18n);
++    step.addOption(bool, "private_macos_apis", self.private_macos_apis);
+     step.addOption(ApprtRuntime, "app_runtime", self.app_runtime);
+     step.addOption(FontBackend, "font_backend", self.font_backend);
+     step.addOption(RendererBackend, "renderer", self.renderer);
+@@ -689,6 +704,7 @@ pub fn fromOptions() Config {
+         .wasm_target = std.meta.stringToEnum(WasmTarget, @tagName(options.wasm_target)).?,
+         .wasm_shared = options.wasm_shared,
+         .i18n = options.i18n,
++        .private_macos_apis = options.private_macos_apis,
+     };
+ }
+ 
+diff --git a/src/build/GhosttyXCFramework.zig b/src/build/GhosttyXCFramework.zig
+index dda0d2173..87462471d 100644
+--- a/src/build/GhosttyXCFramework.zig
++++ b/src/build/GhosttyXCFramework.zig
+@@ -109,7 +109,7 @@ pub fn init(
+     // it to the final app built with Swift.
+     const xcframework = XCFrameworkStep.create(b, .{
+         .name = "GhosttyKit",
+-        .out_path = "macos/GhosttyKit.xcframework",
++        .out_path = deps.config.xcframework_output_path,
+         .libraries = switch (target) {
+             .universal => &.{
+                 .{
+@@ -139,6 +139,12 @@ pub fn init(
+                 },
+             },
+ 
++            .macos => &.{.{
++                .library = macos_universal.output,
++                .headers = headers,
++                .dsym = macos_universal.dsym,
++            }},
++
+             .native => &.{.{
+                 .library = macos_native.output,
+                 .headers = headers,
+diff --git a/src/build/xcframework.zig b/src/build/xcframework.zig
+index 8713a1c9a..4c3939291 100644
+--- a/src/build/xcframework.zig
++++ b/src/build/xcframework.zig
+@@ -1,3 +1,3 @@
+ /// Target for xcframework builds. This is a separate file so that
+ /// our runtime code doesn't need to import build code.
+-pub const Target = enum { native, universal };
++pub const Target = enum { native, universal, macos };
+diff --git a/src/build/GhosttyXcodebuild.zig b/src/build/GhosttyXcodebuild.zig
+--- a/src/build/GhosttyXcodebuild.zig
++++ b/src/build/GhosttyXcodebuild.zig
+@@ -35,9 +35,8 @@
+     };
+ 
+     const xc_arch: ?[]const u8 = switch (deps.xcframework.target) {
+-        // Universal is our default target, so we don't have to
+-        // add anything.
+-        .universal => null,
++        // Both variants contain universal macOS architectures.
++        .universal, .macos => null,
+ 
+         // Native we need to override the architecture in the Xcode
+         // project with the -arch flag.
+@@ -50,6 +49,11 @@
+ 
+     const env = b.graph.environ_map;
+     const app_path = b.fmt("macos/build/{s}/Ghostty.app", .{xc_config});
++    // Xcode runs from macos/, but the framework output is relative to the
++    // build root (or already absolute). Pass the same artifact to both steps.
++    const xcframework_path_arg = b.fmt("GHOSTTYKIT_XCFRAMEWORK_PATH={s}", .{
++        b.pathFromRoot(config.xcframework_output_path),
++    });
+ 
+     // Our step to build the Ghostty macOS app.
+     const build = build: {
+@@ -70,6 +74,8 @@
+             "-configuration",
+             xc_config,
+         });
++
++        step.addArg(xcframework_path_arg);
+ 
+         // If we have a specific architecture, we need to pass it
+         // to xcodebuild.
+@@ -107,6 +113,7 @@
+             "-skip-testing",
+             "GhosttyUITests",
+         });
++        step.addArg(xcframework_path_arg);
+         if (xc_arch) |arch| step.addArgs(&.{ "-arch", arch });
+ 
+         // We need the xcframework
+diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
+index 7316373fa..f5500983f 100644
+--- a/src/apprt/embedded.zig
++++ b/src/apprt/embedded.zig
+@@ -2149,32 +2149,96 @@ pub const CAPI = struct {
+     }
+ 
+     /// Sets the window background blur on macOS to the desired value.
+-    /// I do this in Zig as an extern function because I don't know how to
+-    /// call these functions in Swift.
+-    ///
+-    /// This uses an undocumented, non-public API because this is what
+-    /// every terminal appears to use, including Terminal.app.
++    /// Direct builds support numerical radii. App Store artifacts use public
++    /// AppKit materials, which provide system-managed blur rather than a radius.
+     export fn ghostty_set_window_background_blur(
+         app: *App,
+         window: *anyopaque,
+     ) void {
+-        // This is only supported on macOS
+         if (comptime builtin.target.os.tag != .macos) return;
+ 
+         const config = &app.config;
++        if (comptime @import("build_options").private_macos_apis) {
++            if (config.@"background-opacity" >= 1.0) return;
++            const nswindow = objc.Object.fromId(window);
++            _ = CGSSetWindowBackgroundBlurRadius(
++                CGSDefaultConnectionForThread(),
++                nswindow.msgSend(usize, objc.sel("windowNumber"), .{}),
++                @intCast(config.@"background-blur".cval()),
++            );
++        } else {
++            const macos = @import("macos");
++            var block = PublicWindowBlurBlock.init(.{
++                .window = objc.Object.fromId(window).value,
++                .enabled = config.@"background-opacity" < 1.0 and
++                    config.@"background-blur".cval() > 0,
++            }, &setPublicWindowBlur);
++            const NSThread = objc.getClass("NSThread") orelse return;
++            if (NSThread.msgSend(bool, "isMainThread", .{})) {
++                setPublicWindowBlur(&block);
++            } else {
++                // Copying the block retains the window until AppKit work finishes.
++                macos.dispatch.dispatch_async(
++                    @ptrCast(macos.dispatch.queue.getMain()),
++                    @ptrCast(&block),
++                );
++            }
++        }
++    }
+ 
+-        // Do nothing if we don't have background transparency enabled
+-        if (config.@"background-opacity" >= 1.0) return;
++    const PublicWindowBlurBlock = objc.Block(struct {
++        window: objc.c.id,
++        enabled: bool,
++    }, .{}, void);
+ 
+-        const nswindow = objc.Object.fromId(window);
+-        _ = CGSSetWindowBackgroundBlurRadius(
+-            CGSDefaultConnectionForThread(),
+-            nswindow.msgSend(usize, objc.sel("windowNumber"), .{}),
+-            @intCast(config.@"background-blur".cval()),
+-        );
++    // An address-stable association prevents duplicate effect views and ties
++    // the view's lifetime to its window without owning host application state.
++    var public_window_blur_key: u8 = 0;
++
++    fn setPublicWindowBlur(block: *const PublicWindowBlurBlock.Context) callconv(.c) void {
++        const macos = @import("macos");
++        const window = objc.Object.fromId(block.window);
++        const associated = objc_getAssociatedObject(block.window, &public_window_blur_key);
++        if (!block.enabled) {
++            if (associated) |view| {
++                objc.Object.fromId(view).msgSend(void, "removeFromSuperview", .{});
++                objc_setAssociatedObject(block.window, &public_window_blur_key, null, 1);
++            }
++            return;
++        }
++
++        const content = window.msgSend(objc.Object, "contentView", .{});
++        if (content.value == null) return;
++        const bounds = content.msgSend(macos.graphics.Rect, "bounds", .{});
++        const effect = if (associated) |view|
++            objc.Object.fromId(view)
++        else effect: {
++            const NSVisualEffectView = objc.getClass("NSVisualEffectView") orelse return;
++            const allocated = NSVisualEffectView.msgSend(objc.Object, "alloc", .{});
++            const view = allocated.msgSend(objc.Object, "initWithFrame:", .{bounds});
++            if (view.value == null) return;
++            // OBJC_ASSOCIATION_RETAIN_NONATOMIC keeps the effect available even
++            // when the host replaces its content view between appearance updates.
++            objc_setAssociatedObject(block.window, &public_window_blur_key, view.value, 1);
++            view.release();
++            break :effect view;
++        };
++        effect.msgSend(void, "setFrame:", .{bounds});
++        effect.msgSend(void, "setAutoresizingMask:", .{@as(usize, 2 | 16)});
++        effect.msgSend(void, "setBlendingMode:", .{@as(isize, 0)}); // Behind window.
++        effect.msgSend(void, "setState:", .{@as(isize, 1)}); // Active regardless of focus.
++        effect.msgSend(void, "setMaterial:", .{@as(isize, 21)}); // Under window background.
++        // Reattaching also handles a host replacing the content view.
++        effect.msgSend(void, "removeFromSuperview", .{});
++        content.msgSend(void, "addSubview:positioned:relativeTo:", .{
++            effect.value,
++            @as(isize, -1), // Below terminal content.
++            @as(objc.c.id, null),
++        });
+     }
+ 
+-    /// See ghostty_set_window_background_blur
++    extern "c" fn objc_getAssociatedObject(objc.c.id, *const anyopaque) ?*anyopaque;
++    extern "c" fn objc_setAssociatedObject(objc.c.id, *const anyopaque, objc.c.id, usize) void;
+     extern "c" fn CGSSetWindowBackgroundBlurRadius(*anyopaque, usize, c_int) i32;
+     extern "c" fn CGSDefaultConnectionForThread() *anyopaque;
+ 
+diff --git a/macos/Ghostty.xcodeproj/project.pbxproj b/macos/Ghostty.xcodeproj/project.pbxproj
+--- a/macos/Ghostty.xcodeproj/project.pbxproj
++++ b/macos/Ghostty.xcodeproj/project.pbxproj
+@@ -86,7 +86,7 @@
+ 		A5B30531299BEAAA0047F10C /* Ghostty.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ghostty.app; sourceTree = BUILT_PRODUCTS_DIR; };
+ 		A5B30538299BEAAB0047F10C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+ 		A5B3053D299BEAAB0047F10C /* Ghostty.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Ghostty.entitlements; sourceTree = "<group>"; };
+-		A5D495A1299BEC7E00DD1313 /* GhosttyKit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = GhosttyKit.xcframework; sourceTree = "<group>"; };
++		A5D495A1299BEC7E00DD1313 /* GhosttyKit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = GhosttyKit.xcframework; path = "$(GHOSTTYKIT_XCFRAMEWORK_PATH)"; sourceTree = "<absolute>"; };
+ 		FC5218F92D10FFC7004C93E0 /* zsh */ = {isa = PBXFileReference; lastKnownFileType = folder; name = zsh; path = "../zig-out/share/zsh"; sourceTree = "<group>"; };
+ 		FC9ABA9B2D0F538D0020D4C8 /* bash-completion */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "bash-completion"; path = "../zig-out/share/bash-completion"; sourceTree = "<group>"; };
+ /* End PBXFileReference section */
+@@ -481,6 +481,7 @@
+ 			isa = XCBuildConfiguration;
+ 			buildSettings = {
+ 				ALWAYS_SEARCH_USER_PATHS = NO;
++				GHOSTTYKIT_XCFRAMEWORK_PATH = "$(SRCROOT)/GhosttyKit.xcframework";
+ 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+ 				CLANG_ANALYZER_NONNULL = YES;
+ 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+@@ -817,6 +818,7 @@
+ 			isa = XCBuildConfiguration;
+ 			buildSettings = {
+ 				ALWAYS_SEARCH_USER_PATHS = NO;
++				GHOSTTYKIT_XCFRAMEWORK_PATH = "$(SRCROOT)/GhosttyKit.xcframework";
+ 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+ 				CLANG_ANALYZER_NONNULL = YES;
+ 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+@@ -879,6 +881,7 @@
+ 			isa = XCBuildConfiguration;
+ 			buildSettings = {
+ 				ALWAYS_SEARCH_USER_PATHS = NO;
++				GHOSTTYKIT_XCFRAMEWORK_PATH = "$(SRCROOT)/GhosttyKit.xcframework";
+ 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+ 				CLANG_ANALYZER_NONNULL = YES;
+ 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
