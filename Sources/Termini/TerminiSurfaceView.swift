@@ -9,6 +9,7 @@ public struct TerminiSurfaceView: NSViewRepresentable {
     private let controller: TerminiTerminalController?
     private let showsSystemKeyboard: Bool
     private let appearance: TerminiTerminalAppearance
+    private let surfaceBackground: TerminiSurfaceBackground
     // hosts that keep several surfaces mounted (warm caches)
     // mark all but the selected one invisible so hidden surfaces stop drawing.
     private let isRenderVisible: Bool
@@ -17,28 +18,52 @@ public struct TerminiSurfaceView: NSViewRepresentable {
         controller: TerminiTerminalController? = nil,
         showsSystemKeyboard: Bool = true,
         appearance: TerminiTerminalAppearance = .default,
-        isRenderVisible: Bool = true
+        isRenderVisible: Bool = true,
+        surfaceBackground: TerminiSurfaceBackground = .terminal
     ) {
         self.controller = controller
         self.showsSystemKeyboard = showsSystemKeyboard
         self.appearance = appearance
         self.isRenderVisible = isRenderVisible
+        self.surfaceBackground = surfaceBackground
     }
 
     public init(
         controller: TerminiTerminalController? = nil,
         showsSystemKeyboard: Bool = true,
-        fontSize: Double? = nil
+        fontSize: Double? = nil,
+        surfaceBackground: TerminiSurfaceBackground = .terminal
     ) {
         self.init(
             controller: controller,
             showsSystemKeyboard: showsSystemKeyboard,
-            appearance: .init(fontSize: fontSize)
+            appearance: .init(fontSize: fontSize),
+            surfaceBackground: surfaceBackground
         )
     }
 
+    public final class Coordinator {
+        fileprivate weak var controller: TerminiTerminalController?
+        fileprivate weak var host: AnyObject?
+        fileprivate var token: UInt64?
+    }
+
+    public func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
     public func makeNSView(context: Context) -> SurfaceContainerView {
-        let view = SurfaceContainerView(runtime: .shared)
+        let view: SurfaceContainerView
+        if let controller {
+            let attachment = controller.attachToHost(context.coordinator)
+            view = attachment.surface
+            context.coordinator.controller = controller
+            context.coordinator.host = context.coordinator
+            context.coordinator.token = attachment.token
+        } else {
+            view = SurfaceContainerView(runtime: .shared, surfaceBackground: surfaceBackground)
+        }
+        view.surfaceBackground = surfaceBackground
         view.terminalAppearance = appearance
         view.isRenderVisible = isRenderVisible
         view.bind(controller: controller)
@@ -46,9 +71,30 @@ public struct TerminiSurfaceView: NSViewRepresentable {
     }
 
     public func updateNSView(_ nsView: SurfaceContainerView, context: Context) {
+        if let current = context.coordinator.controller, current !== controller {
+            if let token = context.coordinator.token, let host = context.coordinator.host {
+                current.detachIfCurrent(token, host: host)
+            }
+            context.coordinator.token = nil
+            context.coordinator.controller = nil
+        }
+        if let controller, context.coordinator.controller == nil {
+            let attachment = controller.attachToHost(context.coordinator)
+            context.coordinator.controller = controller
+            context.coordinator.host = context.coordinator
+            context.coordinator.token = attachment.token
+        }
+        nsView.surfaceBackground = surfaceBackground
         nsView.terminalAppearance = appearance
         nsView.isRenderVisible = isRenderVisible
         nsView.bind(controller: controller)
+    }
+
+    public static func dismantleNSView(_ nsView: SurfaceContainerView, coordinator: Coordinator) {
+        if let token = coordinator.token, let controller = coordinator.controller,
+           let host = coordinator.host {
+            controller.detachIfCurrent(token, host: host)
+        }
     }
 }
 
@@ -62,6 +108,7 @@ public final class SurfaceContainerView: NSView {
     /// `ghostty_surface_process_output`, which blocks the main thread on an
     /// un-ticked surface (the tick that drains it also runs on the main thread).
     private var surfaceIOReady = false
+    private var restoredInitialSnapshot = false
     private var pendingOutput = Data()
     private var renderTimer: Timer?
     private var renderTimerMode: RenderTimerMode?
@@ -69,11 +116,19 @@ public final class SurfaceContainerView: NSView {
     private var trackingArea: NSTrackingArea?
     private var keyMonitor: Any?
     private weak var controller: TerminiTerminalController?
+    private var isHostAttached = true
+    private var inputEnabled = true
     private var lastReportedSize: TerminiTerminalSize?
     // MARK: coalesces PTY winsize pushes during live resize.
     private var pendingWinsizeReport: DispatchWorkItem?
     private let liveResizeWinsizeInterval: TimeInterval = 1.0 / 12.0
     private var lastAppliedAppearance: TerminiTerminalAppearance = .default
+    var surfaceBackground: TerminiSurfaceBackground {
+        didSet {
+            guard oldValue != surfaceBackground else { return }
+            updateBackgroundColor()
+        }
+    }
     private let debugInputLogging = ProcessInfo.processInfo.environment["TERMBRIDGEKIT_DEBUG_INPUT"] == "1"
     private var lastMouseLog: TimeInterval = 0
     private let mouseLogInterval: TimeInterval = 0.05
@@ -103,7 +158,7 @@ public final class SurfaceContainerView: NSView {
     private let minOutputDrawInterval: TimeInterval = 1.0 / 60.0
 
     private var canRender: Bool {
-        isRenderVisible && windowIsVisible && window != nil && surface != nil
+        isHostAttached && isRenderVisible && windowIsVisible && window != nil && surface != nil
     }
     var terminalAppearance: TerminiTerminalAppearance = .default {
         didSet {
@@ -113,8 +168,12 @@ public final class SurfaceContainerView: NSView {
         }
     }
 
-    init(runtime: TerminiRuntime) {
+    init(
+        runtime: TerminiRuntime,
+        surfaceBackground: TerminiSurfaceBackground = .terminal
+    ) {
         self.runtime = runtime
+        self.surfaceBackground = surfaceBackground
         super.init(frame: .zero)
         wantsLayer = true
         layerContentsRedrawPolicy = .onSetNeedsDisplay
@@ -137,9 +196,15 @@ public final class SurfaceContainerView: NSView {
             self.occlusionObserver = nil
         }
         guard let window else {
+            isHostAttached = false
+            setSurfaceFocus(false)
+            if let surface {
+                ghostty_surface_set_occlusion(surface, false)
+            }
             stopRenderLoop()
             return
         }
+        isHostAttached = true
         windowIsVisible = window.occlusionState.contains(.visible)
         occlusionObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didChangeOcclusionStateNotification,
@@ -156,7 +221,11 @@ public final class SurfaceContainerView: NSView {
             // Re-attached to a window (e.g. tab switch) with the surface already
             // live — scheduleSurfaceCreation() no-ops, so re-request focus here.
             renderGateChanged()
-            bringToFrontAndFocus()
+            if controller == nil {
+                bringToFrontAndFocus()
+            } else {
+                restoreFocusIfNeeded()
+            }
         } else {
             scheduleSurfaceCreation()
         }
@@ -170,6 +239,7 @@ public final class SurfaceContainerView: NSView {
     public override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         guard terminalAppearance.theme == nil else { return }
+        updateBackgroundColor()
         applyTerminalAppearanceIfNeeded(force: true)
     }
 
@@ -193,6 +263,7 @@ public final class SurfaceContainerView: NSView {
     public override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     public override func becomeFirstResponder() -> Bool {
+        guard inputEnabled else { return false }
         let ok = super.becomeFirstResponder()
         setSurfaceFocus(true)
         controller?.reportFocusChanged(true)
@@ -208,6 +279,67 @@ public final class SurfaceContainerView: NSView {
         stopRenderLoop()
         logInput("resigned first responder: \(ok)")
         return ok
+    }
+
+    func setInputEnabled(_ enabled: Bool) {
+        inputEnabled = enabled
+        if !enabled {
+            _ = window?.makeFirstResponder(nil)
+            setSurfaceFocus(false)
+            stopRenderLoop()
+        }
+    }
+
+    func prepareForHostAttachment() {
+        isHostAttached = true
+        if let surface {
+            ghostty_surface_set_occlusion(surface, canRender)
+        }
+        if window != nil {
+            scheduleSurfaceCreation()
+            renderGateChanged()
+            synchronizeHostFocus()
+        }
+    }
+
+    func detachFromHost() {
+        isHostAttached = false
+        if let surface {
+            ghostty_surface_set_occlusion(surface, false)
+        }
+        setSurfaceFocus(false)
+        if window?.firstResponder === self {
+            _ = window?.makeFirstResponder(nil)
+        }
+        stopRenderLoop()
+        removeFromSuperview()
+    }
+
+    var isSnapshotReady: Bool {
+        surface != nil && surfaceIOReady
+    }
+
+    func requestSnapshot(
+        userdata: UnsafeMutableRawPointer,
+        callback: @escaping ghostty_surface_snapshot_cb
+    ) -> Bool {
+        guard let surface, surfaceIOReady else { return false }
+        ghostty_surface_request_snapshot(surface, userdata, callback)
+        return true
+    }
+
+    private func synchronizeHostFocus() {
+        guard let controller, controller.shouldRestoreFocus() else { return }
+        restoreFocusIfNeeded()
+    }
+
+    private func restoreFocusIfNeeded() {
+        guard let controller, controller.shouldRestoreFocus(), inputEnabled else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isHostAttached, self.window != nil,
+                  self.controller?.shouldRestoreFocus() == true else { return }
+            self.bringToFrontAndFocus()
+        }
     }
 
     // MARK: Layout
@@ -249,7 +381,7 @@ public final class SurfaceContainerView: NSView {
     }
 
     private func updateSurfaceSize() {
-        guard let surface else { return }
+        guard isHostAttached, let surface else { return }
         guard bounds.width > 0, bounds.height > 0 else { return }
         let scale = Double(window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1.0)
         ghostty_surface_set_content_scale(surface, scale, scale)
@@ -403,29 +535,52 @@ public final class SurfaceContainerView: NSView {
             self.surfaceCreationScheduled = false
             guard self.surface == nil, self.window != nil else { return }
             self.createSurfaceIfNeeded()
-            self.bringToFrontAndFocus()
+            if self.controller == nil {
+                self.bringToFrontAndFocus()
+            } else {
+                self.restoreFocusIfNeeded()
+            }
         }
     }
 
     private func createSurfaceIfNeeded() {
         guard surface == nil, let app = runtime.app else { return }
 
-        var cfg = ghostty_surface_config_new()
-        cfg.userdata = Unmanaged.passUnretained(self).toOpaque()
-        cfg.platform_tag = GHOSTTY_PLATFORM_MACOS
-        cfg.platform = ghostty_platform_u(macos: ghostty_platform_macos_s(
-            nsview: Unmanaged.passUnretained(self).toOpaque()
-        ))
-        cfg.scale_factor = Double(window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1.0)
-        cfg.font_size = Float(terminalAppearance.fontSize ?? 0)
-        cfg.wait_after_command = false
+        let initialSnapshot = controller?.consumeInitialSnapshot()
+        func createSurface(with snapshot: Data?) -> ghostty_surface_t? {
+            var cfg = ghostty_surface_config_new()
+            cfg.userdata = Unmanaged.passUnretained(self).toOpaque()
+            cfg.platform_tag = GHOSTTY_PLATFORM_MACOS
+            cfg.platform = ghostty_platform_u(macos: ghostty_platform_macos_s(
+                nsview: Unmanaged.passUnretained(self).toOpaque()
+            ))
+            cfg.scale_factor = Double(window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1.0)
+            cfg.font_size = Float(terminalAppearance.fontSize ?? 0)
+            cfg.wait_after_command = false
+            guard let snapshot, !snapshot.isEmpty else {
+                return ghostty_surface_new(app, &cfg)
+            }
+            return snapshot.withUnsafeBytes { buffer in
+                cfg.initial_snapshot = buffer.bindMemory(to: UInt8.self).baseAddress
+                cfg.initial_snapshot_len = snapshot.count
+                return ghostty_surface_new(app, &cfg)
+            }
+        }
 
-        guard let created = ghostty_surface_new(app, &cfg) else { return }
+        let firstAttempt = createSurface(with: initialSnapshot)
+        let restored = firstAttempt != nil && initialSnapshot != nil
+        var created = firstAttempt
+        if created == nil, initialSnapshot != nil {
+            controller?.reportInitialSnapshotRejected()
+            created = createSurface(with: nil)
+        }
+        guard let created else { return }
+        restoredInitialSnapshot = restored
         surface = created
         // seed the render gate (a warm surface can be
         // created while another one is selected, or the window occluded).
         ghostty_surface_set_occlusion(created, canRender)
-        setSurfaceFocus(true)
+        setSurfaceFocus(controller == nil || controller?.shouldRestoreFocus() == true)
         updateSurfaceSize()
         ghostty_surface_refresh(created)
         ghostty_surface_draw(created)
@@ -450,8 +605,9 @@ public final class SurfaceContainerView: NSView {
             guard let self, self.surface != nil else { return }
             self.runtime.tick()
             self.surfaceIOReady = true
-            self.applyTerminalAppearanceIfNeeded(force: true)
+            self.applyTerminalAppearanceIfNeeded(force: !self.restoredInitialSnapshot)
             self.flushPendingOutput()
+            self.restoreFocusIfNeeded()
         }
     }
 
@@ -469,6 +625,22 @@ public final class SurfaceContainerView: NSView {
 
     func handleTransportWrite(_ data: Data) {
         controller?.forwardTransportWrite(data)
+    }
+
+    func reportFindStarted(_ query: String) {
+        controller?.reportFindStarted(query)
+    }
+
+    func reportFindEnded() {
+        controller?.reportFindEnded()
+    }
+
+    func reportFindTotal(_ total: Int?) {
+        controller?.reportFindTotal(total)
+    }
+
+    func reportFindSelected(_ selected: Int?) {
+        controller?.reportFindSelected(selected)
     }
 
     func bind(controller: TerminiTerminalController?) {
@@ -497,6 +669,18 @@ public final class SurfaceContainerView: NSView {
             },
             diagnostics: {
                 nil
+            },
+            setFindQuery: { [weak self] query in
+                self?.applyBindingAction("search:\(query)")
+            },
+            findNext: { [weak self] in
+                self?.applyBindingAction("navigate_search:next")
+            },
+            findPrevious: { [weak self] in
+                self?.applyBindingAction("navigate_search:previous")
+            },
+            clearFind: { [weak self] in
+                self?.applyBindingAction("end_search")
             }
         )
         reportSizeIfNeeded()
@@ -547,11 +731,11 @@ public final class SurfaceContainerView: NSView {
         guard let surface else { return }
         var canCommitAppearanceState = true
 
-        if force || lastAppliedAppearance.theme != terminalAppearance.theme {
-            if let theme = terminalAppearance.theme {
+        if force || lastAppliedAppearance.colorStyle != terminalAppearance.colorStyle {
+            if let theme = resolvedTerminalTheme {
                 ghostty_surface_set_color_scheme(surface, theme.ghosttyColorScheme)
                 processRemoteOutput(Data(theme.applyEscapeSequence.utf8))
-            } else if lastAppliedAppearance.theme != nil {
+            } else if lastAppliedAppearance.colorStyle != .terminalDefault {
                 ghostty_surface_set_color_scheme(surface, ambientGhosttyColorScheme)
                 processRemoteOutput(Data(TerminiTerminalTheme.resetEscapeSequence.utf8))
             } else if force {
@@ -590,13 +774,78 @@ public final class SurfaceContainerView: NSView {
     }
 
     private func updateBackgroundColor() {
-        let color = terminalAppearance.theme?.background ?? .init(hex: 0x000000)
+        guard surfaceBackground == .terminal else {
+            layer?.isOpaque = false
+            layer?.backgroundColor = NSColor.clear.cgColor
+            return
+        }
+
+        let color = resolvedTerminalTheme?.background ?? .init(hex: 0x000000)
         layer?.backgroundColor = NSColor(
             srgbRed: CGFloat(color.red) / 255.0,
             green: CGFloat(color.green) / 255.0,
             blue: CGFloat(color.blue) / 255.0,
             alpha: 1.0
         ).cgColor
+        layer?.isOpaque = true
+    }
+
+    public override var isOpaque: Bool {
+        surfaceBackground == .terminal
+    }
+
+    private var resolvedTerminalTheme: TerminiTerminalTheme? {
+        switch terminalAppearance.colorStyle {
+        case .terminalDefault:
+            nil
+        case .system:
+            systemTerminalTheme
+        case let .theme(theme):
+            theme
+        }
+    }
+
+    private var systemTerminalTheme: TerminiTerminalTheme {
+        TerminiTerminalTheme(
+            id: "system",
+            name: "System",
+            colorScheme: ambientGhosttyColorScheme == GHOSTTY_COLOR_SCHEME_DARK ? .dark : .light,
+            background: terminalColor(.windowBackgroundColor),
+            foreground: terminalColor(.labelColor),
+            cursor: terminalColor(.controlAccentColor),
+            selectionBackground: terminalColor(.selectedTextBackgroundColor),
+            selectionForeground: terminalColor(.selectedTextColor),
+            ansiPalette: [
+                terminalColor(.secondaryLabelColor),
+                terminalColor(.systemRed),
+                terminalColor(.systemGreen),
+                terminalColor(.systemOrange),
+                terminalColor(.systemBlue),
+                terminalColor(.systemPurple),
+                terminalColor(.systemTeal),
+                terminalColor(.labelColor),
+                terminalColor(.tertiaryLabelColor),
+                terminalColor(.systemPink),
+                terminalColor(.systemMint),
+                terminalColor(.systemYellow),
+                terminalColor(.systemIndigo),
+                terminalColor(.systemPurple),
+                terminalColor(.systemCyan),
+                terminalColor(.labelColor)
+            ]
+        )
+    }
+
+    private func terminalColor(_ color: NSColor) -> TerminiTerminalColor {
+        var resolved = color
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            resolved = color.usingColorSpace(.sRGB) ?? color
+        }
+        return TerminiTerminalColor(
+            red: UInt8(min(max((resolved.redComponent * 255).rounded(), 0), 255)),
+            green: UInt8(min(max((resolved.greenComponent * 255).rounded(), 0), 255)),
+            blue: UInt8(min(max((resolved.blueComponent * 255).rounded(), 0), 255))
+        )
     }
 
     private var ambientGhosttyColorScheme: ghostty_color_scheme_e {
@@ -761,7 +1010,7 @@ public final class SurfaceContainerView: NSView {
     }
 
     private func sendKeyEvent(_ event: NSEvent, action: ghostty_input_action_e) {
-        guard let surface else { return }
+        guard inputEnabled, isHostAttached, let surface else { return }
 
         var keyEvent = ghostty_input_key_s(
             action: action,
@@ -789,6 +1038,7 @@ public final class SurfaceContainerView: NSView {
     // MARK: Mouse
 
     public override func mouseDown(with event: NSEvent) {
+        guard inputEnabled, isHostAttached else { return }
         bringToFrontAndFocus()
         setSurfaceFocus(true)
         logInput("mouseDown button=\(event.buttonNumber) loc=\(event.locationInWindow)")
@@ -796,6 +1046,7 @@ public final class SurfaceContainerView: NSView {
     }
 
     public override func mouseUp(with event: NSEvent) {
+        guard inputEnabled, isHostAttached else { return }
         logInput("mouseUp button=\(event.buttonNumber) loc=\(event.locationInWindow)")
         sendMouse(event, state: GHOSTTY_MOUSE_RELEASE)
     }
@@ -848,7 +1099,7 @@ public final class SurfaceContainerView: NSView {
     }
 
     func forwardScrollWheelEvent(_ event: NSEvent) {
-        guard let surface else { return }
+        guard inputEnabled, isHostAttached, let surface else { return }
         let precision = event.hasPreciseScrollingDeltas
         let momentum: ghostty_input_mouse_momentum_e
         switch event.momentumPhase {
@@ -880,7 +1131,8 @@ public final class SurfaceContainerView: NSView {
         momentum: ghostty_input_mouse_momentum_e = GHOSTTY_MOUSE_MOMENTUM_NONE,
         surface: ghostty_surface_t? = nil
     ) {
-        guard let surface = surface ?? self.surface, !delta.isZero else { return }
+        guard inputEnabled, isHostAttached,
+              let surface = surface ?? self.surface, !delta.isZero else { return }
         let scrollMods = ghostty_input_scroll_mods_t(
             (precision ? 1 : 0) | (Int32(momentum.rawValue) << 1)
         )
@@ -888,7 +1140,7 @@ public final class SurfaceContainerView: NSView {
     }
 
     private func sendMouse(_ event: NSEvent, state: ghostty_input_mouse_state_e) {
-        guard let surface else { return }
+        guard inputEnabled, isHostAttached, let surface else { return }
         let mods = modsFromFlags(event.modifierFlags)
         let button = mouseButton(from: event)
         ghostty_surface_mouse_button(surface, state, button, mods)
@@ -897,7 +1149,7 @@ public final class SurfaceContainerView: NSView {
     }
 
     private func sendMouseMove(_ event: NSEvent) {
-        guard let surface else { return }
+        guard inputEnabled, isHostAttached, let surface else { return }
         let location = convert(event.locationInWindow, from: nil)
         let mods = modsFromFlags(event.modifierFlags)
         let flippedY = bounds.height - location.y
@@ -920,6 +1172,7 @@ public final class SurfaceContainerView: NSView {
     }
 
     private func bringToFrontAndFocus() {
+        guard inputEnabled, isHostAttached else { return }
         // Make sure the app and window are active before requesting first responder.
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
@@ -936,6 +1189,7 @@ public final class SurfaceContainerView: NSView {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
             guard let self else { return event }
+            guard self.inputEnabled, self.isHostAttached else { return event }
             guard event.window == self.window, self.window?.firstResponder === self else {
                 return event
             }
@@ -1007,7 +1261,7 @@ public final class SurfaceContainerView: NSView {
     }
 
     private func pasteFromClipboard() -> Bool {
-        guard let surface else { return false }
+        guard inputEnabled, isHostAttached, let surface else { return false }
         let action = "paste_from_clipboard"
         let success = ghostty_surface_binding_action(
             surface,

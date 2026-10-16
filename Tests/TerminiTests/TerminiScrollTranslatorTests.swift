@@ -62,4 +62,49 @@ final class TerminiScrollTranslatorTests: XCTestCase {
         )
     }
 
+    func testScrollbarMetricsMapGhosttyEndpointsToNativeInsets() {
+        let top = TerminiScrollbarState(total: 120, offset: 0, len: 20).metrics(
+            boundsHeight: 400,
+            adjustedContentInsetTop: 44,
+            adjustedContentInsetBottom: 20
+        )
+        let bottom = TerminiScrollbarState(total: 120, offset: 100, len: 20).metrics(
+            boundsHeight: 400,
+            adjustedContentInsetTop: 44,
+            adjustedContentInsetBottom: 20
+        )
+
+        XCTAssertEqual(top.minY, -44)
+        XCTAssertEqual(top.maxY, 1_956)
+        XCTAssertEqual(top.canonicalY, top.minY)
+        XCTAssertEqual(bottom.canonicalY, bottom.maxY)
+        XCTAssertEqual(top.contentSizeHeight, 2_336)
+    }
+
+    func testScrollbarMetricsExposeNoRangeWhenLenIsZero() {
+        let metrics = TerminiScrollbarState(total: 120, offset: 80, len: 0).metrics(
+            boundsHeight: 400,
+            adjustedContentInsetTop: 44,
+            adjustedContentInsetBottom: 20
+        )
+
+        XCTAssertFalse(metrics.hasRange)
+        XCTAssertEqual(metrics.minY, -44)
+        XCTAssertEqual(metrics.maxY, metrics.minY)
+        XCTAssertEqual(metrics.canonicalY, metrics.minY)
+    }
+
+    func testScrollbarMetricsOnlyTranslateGenuineEdgeOverscroll() {
+        let metrics = TerminiScrollbarState(total: 120, offset: 40, len: 20).metrics(
+            boundsHeight: 400,
+            adjustedContentInsetTop: 44,
+            adjustedContentInsetBottom: 20
+        )
+
+        XCTAssertEqual(metrics.overscrollTranslation(for: metrics.minY + 10), 0)
+        XCTAssertEqual(metrics.overscrollTranslation(for: metrics.maxY - 10), 0)
+        XCTAssertEqual(metrics.overscrollTranslation(for: metrics.minY - 18), 18)
+        XCTAssertEqual(metrics.overscrollTranslation(for: metrics.maxY + 18), -18)
+    }
+
 }

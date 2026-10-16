@@ -18,16 +18,17 @@ let packageRoot = packageRootCandidates.first(where: {
 let localGhosttyKitRelativePath = "vendor/ghostty/macos/GhosttyKit.xcframework"
 let localGhosttyKitAbsolutePath = packageRoot.appending(path: localGhosttyKitRelativePath).path
 let bundledGhosttyKitExists = fileManager.fileExists(atPath: localGhosttyKitAbsolutePath)
-// 0.1.6 tracks Ghostty main (07d31666e, Jun 2026) plus Termini embedding
+// 0.1.6 tracks Ghostty main (d71bcd105, Jun 2026) plus Termini embedding
 // APIs (`write_to_host_cb`, `ghostty_surface_process_output`, font config
-// setters). Upstream already includes the iOS Metal surface-attach fixes.
+// setters, and durable surface snapshots). Upstream already includes the iOS
+// Metal surface-attach fixes.
 //
 // Local development: drop the rebuilt xcframework into
 // `vendor/ghostty/macos/GhosttyKit.xcframework` and the local-vendor
 // preference above will use it. The URL below is consumed when no local
 // vendor is present (CI, downstream packages).
-let releaseGhosttyKitURL = "https://github.com/FauxFoxIO/Termini/releases/download/ghosttykit-0.2.0-visionos-abi-fixed/GhosttyKit.xcframework.zip"
-let releaseGhosttyKitChecksum = "03cbf280b214b18c50dd765d2e297d08d1cd76bcc49e8eca677495b7417ed46b"
+let releaseGhosttyKitURL = "https://github.com/FauxFoxIO/Termini/releases/download/ghosttykit-0.3.0-appstore-safe/GhosttyKit.xcframework.zip"
+let releaseGhosttyKitChecksum = "7bb1fe5f0030ebcdb5592ebc1b110001dff3f926306165e0dcaa87f4d1739c66"
 
 let ghosttyKitTarget: Target =
     if bundledGhosttyKitExists {

@@ -4,7 +4,9 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-XCFRAMEWORK_PATH="${1:-${REPO_ROOT}/vendor/ghostty/macos/GhosttyKit.xcframework}"
+XCFRAMEWORK_PATH="${1:-${GHOSTTYKIT_INSTALL_DIR:-${REPO_ROOT}/vendor/ghostty/macos}/GhosttyKit.xcframework}"
+member_tmp_dir=""
+trap 'if [[ -n "${member_tmp_dir}" ]]; then rm -rf -- "${member_tmp_dir}"; fi' EXIT
 
 if [[ ! -d "${XCFRAMEWORK_PATH}" ]]; then
   echo "error: '${XCFRAMEWORK_PATH}' does not exist or is not a directory" >&2
@@ -97,6 +99,7 @@ required_apis=(
   ghostty_surface_key
   ghostty_surface_text
   ghostty_surface_process_output
+  ghostty_surface_request_snapshot
   ghostty_surface_mouse_button
   ghostty_surface_mouse_pos
   ghostty_surface_mouse_scroll
@@ -104,6 +107,13 @@ required_apis=(
   ghostty_surface_complete_clipboard_request
   ghostty_surface_read_text
   ghostty_surface_free_text
+)
+
+required_snapshot_declarations=(
+  ghostty_surface_snapshot_status_e
+  ghostty_surface_snapshot_cb
+  initial_snapshot
+  initial_snapshot_len
 )
 
 for header in "${XCFRAMEWORK_PATH}"/*/Headers/ghostty.h; do
@@ -114,10 +124,65 @@ for header in "${XCFRAMEWORK_PATH}"/*/Headers/ghostty.h; do
       exit 1
     fi
   done
+  for declaration in "${required_snapshot_declarations[@]}"; do
+    if ! /usr/bin/grep -Eq "${declaration}" "${header}"; then
+      echo "error: $(dirname "${header}") is missing required snapshot declaration ${declaration}" >&2
+      exit 1
+    fi
+  done
 done
 
 for library in "${XCFRAMEWORK_PATH}"/*/*.a; do
   [[ -f "${library}" ]] || continue
+
+  # Keep the audit scoped to identifiers emitted by Sentry, Breakpad, or
+  # Crashpad. In particular, do not reject ordinary prose or C++ names such
+  # as std::...::sentry or dev-sentry.
+  symbols="$(nm -a "${library}")"
+
+  # Embedding must remain App Store-safe, including unused exported entry points.
+  if private_api_evidence="$(grep -Em 5 '(^|[[:space:]])_?(CGSDefaultConnectionForThread|CGSSetWindowBackgroundBlurRadius)([[:space:]]|$)' <<< "${symbols}")"; then
+    echo "error: ${library} contains private macOS API symbol evidence:" >&2
+    echo "${private_api_evidence}" >&2
+    exit 1
+  fi
+  if symbol_evidence="$(grep -Eim 5 '(^|[[:space:]])_?(sentry_[[:alnum:]_]+|google_breakpad|breakpad|crashpad)([[:space:]]|$)' <<< "${symbols}")"; then
+    echo "error: ${library} contains forbidden Sentry/Breakpad/Crashpad symbol evidence:" >&2
+    echo "${symbol_evidence}" >&2
+    exit 1
+  fi
+
+  member_pattern='(^|/)(sentry([._-][[:alnum:]_.-]+)?|breakpad([._-][[:alnum:]_.-]+)?|crashpad([._-][[:alnum:]_.-]+)?|google_breakpad([._-][[:alnum:]_.-]+)?)$'
+  audit_members() {
+    local archive="$1"
+    local members
+    members="$(ar -t "${archive}")"
+    if member_evidence="$(grep -Eim 5 "${member_pattern}" <<< "${members}")"; then
+      echo "error: ${library} contains forbidden Sentry/Breakpad/Crashpad archive member evidence:" >&2
+      echo "${member_evidence}" >&2
+      exit 1
+    fi
+  }
+  if ! members="$(ar -t "${library}" 2>/dev/null)"; then
+    member_tmp_dir="$(mktemp -d "$(getconf DARWIN_USER_TEMP_DIR)termini-ghosttykit-audit.XXXXXX")"
+    for architecture in $(lipo -archs "${library}"); do
+      member_tmp="${member_tmp_dir}/${architecture}.a"
+      lipo -thin "${architecture}" "${library}" -output "${member_tmp}"
+      audit_members "${member_tmp}"
+    done
+    rm -rf "${member_tmp_dir}"
+    member_tmp_dir=""
+  else
+    audit_members "${library}"
+  fi
+
+  embedded="$(strings -a "${library}")"
+  if string_evidence="$(grep -Eim 10 '(^|[[:space:]"'"'"'=:/])(_?sentry-init|_?sentry_[[:alnum:]_]+|sentry-(native|sdk)|google_breakpad|breakpad[-_./][[:alnum:]_.-]+|crashpad[-_./][[:alnum:]_.-]+)([^[:alnum:]_]|$)' <<< "${embedded}")"; then
+    echo "error: ${library} contains forbidden Sentry/Breakpad/Crashpad embedded identifier evidence:" >&2
+    echo "${string_evidence}" >&2
+    exit 1
+  fi
+
   exported_symbols="$(nm -gU "${library}")"
   for api in "${required_apis[@]}"; do
     if ! /usr/bin/grep -Eq "[[:space:]]_${api}$" <<< "${exported_symbols}"; then

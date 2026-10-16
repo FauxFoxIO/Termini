@@ -7,6 +7,16 @@ public enum TerminiTerminalColorScheme: String, CaseIterable, Codable, Identifia
     public var id: Self { self }
 }
 
+/// Selects where a terminal surface gets its colors.
+public enum TerminiTerminalColorStyle: Hashable, Codable, Sendable {
+    /// Preserve Ghostty's configured colors while following the ambient light/dark color scheme.
+    case terminalDefault
+    /// Resolve semantic platform colors and refresh them whenever the system appearance changes.
+    case system
+    /// Apply a fixed, portable RGB theme.
+    case theme(TerminiTerminalTheme)
+}
+
 public struct TerminiTerminalColor: Hashable, Codable, Sendable {
     public var red: UInt8
     public var green: UInt8
@@ -213,7 +223,17 @@ public struct TerminiTerminalFontFamily: Hashable, Codable, Sendable, Identifiab
 }
 
 public struct TerminiTerminalAppearance: Hashable, Codable, Sendable {
-    public var theme: TerminiTerminalTheme?
+    public var colorStyle: TerminiTerminalColorStyle
+    /// Compatibility projection for callers that use fixed themes.
+    public var theme: TerminiTerminalTheme? {
+        get {
+            guard case let .theme(theme) = colorStyle else { return nil }
+            return theme
+        }
+        set {
+            colorStyle = newValue.map(TerminiTerminalColorStyle.theme) ?? .terminalDefault
+        }
+    }
     public var fontSize: Double?
     public var fontFamily: TerminiTerminalFontFamily?
     /// Extra libghostty config files to load into each surface's config (applied
@@ -227,11 +247,58 @@ public struct TerminiTerminalAppearance: Hashable, Codable, Sendable {
         fontFamily: TerminiTerminalFontFamily? = nil,
         extraConfigFilePaths: [String] = []
     ) {
-        self.theme = theme
+        colorStyle = theme.map(TerminiTerminalColorStyle.theme) ?? .terminalDefault
+        self.fontSize = fontSize
+        self.fontFamily = fontFamily
+        self.extraConfigFilePaths = extraConfigFilePaths
+    }
+
+    public init(
+        colorStyle: TerminiTerminalColorStyle,
+        fontSize: Double? = nil,
+        fontFamily: TerminiTerminalFontFamily? = nil,
+        extraConfigFilePaths: [String] = []
+    ) {
+        self.colorStyle = colorStyle
         self.fontSize = fontSize
         self.fontFamily = fontFamily
         self.extraConfigFilePaths = extraConfigFilePaths
     }
 
     public static let `default` = TerminiTerminalAppearance()
+
+    private enum CodingKeys: String, CodingKey {
+        case colorStyle
+        case theme
+        case fontSize
+        case fontFamily
+        case extraConfigFilePaths
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let colorStyle = try container.decodeIfPresent(TerminiTerminalColorStyle.self, forKey: .colorStyle) {
+            self.colorStyle = colorStyle
+        } else if let theme = try container.decodeIfPresent(TerminiTerminalTheme.self, forKey: .theme) {
+            colorStyle = .theme(theme)
+        } else {
+            colorStyle = .terminalDefault
+        }
+        fontSize = try container.decodeIfPresent(Double.self, forKey: .fontSize)
+        fontFamily = try container.decodeIfPresent(TerminiTerminalFontFamily.self, forKey: .fontFamily)
+        extraConfigFilePaths = try container.decodeIfPresent(
+            [String].self,
+            forKey: .extraConfigFilePaths
+        ) ?? []
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(colorStyle, forKey: .colorStyle)
+        try container.encodeIfPresent(fontSize, forKey: .fontSize)
+        try container.encodeIfPresent(fontFamily, forKey: .fontFamily)
+        if !extraConfigFilePaths.isEmpty {
+            try container.encode(extraConfigFilePaths, forKey: .extraConfigFilePaths)
+        }
+    }
 }

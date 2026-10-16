@@ -11,7 +11,11 @@ GHOSTTY_REPO="${GHOSTTY_REPO:-git@github.com:FauxFoxIO/ghostty.git}"
 GHOSTTY_REF="${GHOSTTY_REF:-d71bcd105abafd03a5da4cb389219e4ecae01b07}"
 GHOSTTY_OPTIMIZE="${GHOSTTY_OPTIMIZE:-ReleaseFast}"
 GHOSTTY_PATCH_DIR="${GHOSTTY_PATCH_DIR:-${REPO_ROOT}/patches/ghostty/0.1.6-zig016}"
+GHOSTTYKIT_INSTALL_DIR="${GHOSTTYKIT_INSTALL_DIR:-${REPO_ROOT}/vendor/ghostty/macos}"
+GHOSTTYKIT_METADATA_PATH="${GHOSTTYKIT_METADATA_PATH:-${REPO_ROOT}/vendor/ghosttykit-metadata.json}"
 ZIG="${ZIG:-zig}"
+GHOSTTY_BUILD_ROOT="${GHOSTTY_BUILD_ROOT:-${HOME}/Library/Caches/Termini/GhosttyKit}"
+GHOSTTYKIT_BUILD_PATH="${GHOSTTY_BUILD_ROOT}/GhosttyKit.xcframework"
 SHOULD_FETCH=0
 
 usage() {
@@ -31,6 +35,9 @@ Env:
   GHOSTTY_REF
   GHOSTTY_OPTIMIZE
   GHOSTTY_PATCH_DIR
+  GHOSTTYKIT_INSTALL_DIR   Directory receiving GhosttyKit.xcframework (default: ${GHOSTTYKIT_INSTALL_DIR})
+  GHOSTTYKIT_METADATA_PATH Metadata output path (default: ${GHOSTTYKIT_METADATA_PATH})
+  GHOSTTY_BUILD_ROOT   External build output and dependency caches (default: ${GHOSTTY_BUILD_ROOT})
   ZIG                 Zig 0.16 executable (default: ${ZIG})
 EOF
 }
@@ -60,15 +67,15 @@ apply_patches() {
   fi
 
   for patch in "${patches[@]}"; do
-    if git -C "${GHOSTTY_DIR}" apply --reverse --check "${patch}" >/dev/null 2>&1; then
+    if git -C "${GHOSTTY_DIR}" apply --unidiff-zero --reverse --check "${patch}" >/dev/null 2>&1; then
       echo "Patch already applied: $(basename "${patch}")"
       continue
     fi
-    if ! git -C "${GHOSTTY_DIR}" apply --check "${patch}"; then
+    if ! git -C "${GHOSTTY_DIR}" apply --unidiff-zero --check "${patch}"; then
       echo "error: patch does not apply cleanly: ${patch}" >&2
       exit 1
     fi
-    git -C "${GHOSTTY_DIR}" apply "${patch}"
+    git -C "${GHOSTTY_DIR}" apply --unidiff-zero "${patch}"
     echo "Applied patch: $(basename "${patch}")"
   done
 }
@@ -144,9 +151,16 @@ ensure_checkout
 update_checkout
 apply_patches
 
+mkdir -p "${GHOSTTY_BUILD_ROOT}"
 (
   cd "${GHOSTTY_DIR}"
+  # Embedded libraries must not install a process-wide crash handler; the host owns that policy.
   "${ZIG}" build \
+    --cache-dir "${GHOSTTY_BUILD_ROOT}/ZigCache" \
+    --global-cache-dir "${GHOSTTY_BUILD_ROOT}/ZigGlobalCache" \
+    --prefix "${GHOSTTY_BUILD_ROOT}/ZigOut" \
+    -Dxcframework-output-path="${GHOSTTYKIT_BUILD_PATH}" \
+    -Dprivate-macos-apis=false \
     -Dapp-runtime=none \
     -Demit-xcframework=true \
     -Demit-macos-app=false \
@@ -155,7 +169,12 @@ apply_patches
     -Dxcframework-target=universal
 )
 
-"${REPO_ROOT}/scripts/install-ghosttykit.sh" "${GHOSTTY_DIR}/macos/GhosttyKit.xcframework"
-"${REPO_ROOT}/scripts/verify-ghosttykit.sh"
+GHOSTTYKIT_INSTALL_DIR="${GHOSTTYKIT_INSTALL_DIR}" \
+GHOSTTYKIT_METADATA_PATH="${GHOSTTYKIT_METADATA_PATH}" \
+GHOSTTY_SOURCE_DIR="${GHOSTTY_DIR}" \
+  "${REPO_ROOT}/scripts/install-ghosttykit.sh" "${GHOSTTYKIT_BUILD_PATH}"
+GHOSTTYKIT_INSTALL_DIR="${GHOSTTYKIT_INSTALL_DIR}" \
+  "${REPO_ROOT}/scripts/verify-ghosttykit.sh" \
+  "${GHOSTTYKIT_INSTALL_DIR}/GhosttyKit.xcframework"
 
 echo "Built GhosttyKit from $(git -C "${GHOSTTY_DIR}" rev-parse --short HEAD)"
