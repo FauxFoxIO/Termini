@@ -17,7 +17,27 @@ let packageRoot = packageRootCandidates.first(where: {
 }) ?? packageRootCandidates[0]
 let localGhosttyKitRelativePath = "vendor/ghostty/macos/GhosttyKit.xcframework"
 let localGhosttyKitAbsolutePath = packageRoot.appending(path: localGhosttyKitRelativePath).path
-let bundledGhosttyKitExists = fileManager.fileExists(atPath: localGhosttyKitAbsolutePath)
+// Embedding ABI that Termini's sources call. A local framework built before
+// these declarations existed is ignored so it cannot shadow the release.
+let requiredGhosttyKitDeclarations = [
+    "ghostty_surface_snapshot_cb",
+    "ghostty_surface_request_snapshot",
+]
+let bundledGhosttyKitExists: Bool = {
+    let frameworkURL = URL(fileURLWithPath: localGhosttyKitAbsolutePath)
+    guard fileManager.fileExists(atPath: frameworkURL.appending(path: "Info.plist").path),
+          let slices = try? fileManager.contentsOfDirectory(atPath: frameworkURL.path)
+    else { return false }
+    let headers = slices.compactMap { slice in
+        try? String(
+            contentsOf: frameworkURL.appending(path: "\(slice)/Headers/ghostty.h"),
+            encoding: .utf8
+        )
+    }
+    return !headers.isEmpty && headers.allSatisfy { header in
+        requiredGhosttyKitDeclarations.allSatisfy(header.contains)
+    }
+}()
 // 0.1.6 tracks Ghostty main (d71bcd105, Jun 2026) plus Termini embedding
 // APIs (`write_to_host_cb`, `ghostty_surface_process_output`, font config
 // setters, and durable surface snapshots). Upstream already includes the iOS
@@ -25,8 +45,10 @@ let bundledGhosttyKitExists = fileManager.fileExists(atPath: localGhosttyKitAbso
 //
 // Local development: drop the rebuilt xcframework into
 // `vendor/ghostty/macos/GhosttyKit.xcframework` and the local-vendor
-// preference above will use it. The URL below is consumed when no local
-// vendor is present (CI, downstream packages).
+// preference above will use it. The URL below is consumed when no current
+// local vendor is present (CI, downstream packages). SwiftPM caches manifest
+// evaluation, so after adding or removing a local framework run
+// `swift package purge-cache` or build once with `--manifest-cache none`.
 let releaseGhosttyKitURL = "https://github.com/FauxFoxIO/Termini/releases/download/ghosttykit-0.3.0-appstore-safe/GhosttyKit.xcframework.zip"
 let releaseGhosttyKitChecksum = "7bb1fe5f0030ebcdb5592ebc1b110001dff3f926306165e0dcaa87f4d1739c66"
 
