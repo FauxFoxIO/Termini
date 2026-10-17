@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		0CD83A783BFE2A0818EFAFB1 /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = 788AB1E0C88FA040AFDEC97A /* App.swift */; };
 		949CEB9552A4C75F056A9BB9 /* Termini in Frameworks */ = {isa = PBXBuildFile; productRef = 3BA0B5EC6777A62DF7542D39 /* Termini */; };
+		A1C3E5F7092B4D6F81A3C5E7 /* TerminiSSH in Frameworks */ = {isa = PBXBuildFile; productRef = B2D4F6081A3C5E7092B4D6F8 /* TerminiSSH */; };
 		AD26EB197312BAC98F259F7D /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 369508C2285280B5A916CD38 /* ContentView.swift */; };
 /* End PBXBuildFile section */
 
@@ -25,6 +26,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				949CEB9552A4C75F056A9BB9 /* Termini in Frameworks */,
+				A1C3E5F7092B4D6F81A3C5E7 /* TerminiSSH in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -83,6 +85,7 @@
 			name = TerminiIOSDemo;
 			packageProductDependencies = (
 				3BA0B5EC6777A62DF7542D39 /* Termini */,
+				B2D4F6081A3C5E7092B4D6F8 /* TerminiSSH */,
 			);
 			productName = TerminiIOSDemo;
 			productReference = 9C76DFE4F7EB574B2A710A86 /* TerminiIOSDemo.app */;
@@ -337,6 +340,10 @@
 		3BA0B5EC6777A62DF7542D39 /* Termini */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = Termini;
+		};
+		B2D4F6081A3C5E7092B4D6F8 /* TerminiSSH */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TerminiSSH;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
