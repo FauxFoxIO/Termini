@@ -22,6 +22,11 @@ public struct TerminiSSHConfiguration: Equatable, Sendable {
     public var useExecRequest: Bool
     public var hostKeyPolicy: TerminiSSHHostKeyPolicy
     public var hostKeyFingerprint: String?
+    /// The name host-key verification uses instead of `host`, so one server reached at several addresses or through
+    /// a tunnel keeps one trusted key.
+    public var hostKeyAlias: String?
+    /// How long a TCP transport waits for the server to accept the connection.
+    public var connectTimeout: Duration
 
     public init(
         host: String,
@@ -33,7 +38,9 @@ public struct TerminiSSHConfiguration: Equatable, Sendable {
         startupCommand: String? = nil,
         useExecRequest: Bool = false,
         hostKeyPolicy: TerminiSSHHostKeyPolicy = .trustOnFirstUse,
-        hostKeyFingerprint: String? = nil
+        hostKeyFingerprint: String? = nil,
+        hostKeyAlias: String? = nil,
+        connectTimeout: Duration = .seconds(10)
     ) {
         self.host = host
         self.port = port
@@ -45,6 +52,8 @@ public struct TerminiSSHConfiguration: Equatable, Sendable {
         self.useExecRequest = useExecRequest
         self.hostKeyPolicy = hostKeyPolicy
         self.hostKeyFingerprint = hostKeyFingerprint
+        self.hostKeyAlias = hostKeyAlias
+        self.connectTimeout = connectTimeout
     }
 }
 
@@ -62,13 +71,19 @@ public final class TerminiSSHSession {
     }
 
     public private(set) var endpointLabel: String = ""
+    /// Why the last connection attempt failed; `nil` while connecting or after a clean disconnect.
+    public private(set) var failure: TerminiSSHFailure?
+    /// Whether `[Termini]` connection status lines go to the output.
+    public var showsStatusLines = true
     public var onStatusChange: ((Status) -> Void)? {
         didSet { onStatusChange?(status) }
     }
 
-    private let controller: TerminiTerminalController
-    private var eventLoopGroup: NIOTSEventLoopGroup?
+    private let controller: TerminiTerminalController?
+    private var transportConnection: TerminiSSHTransportConnection?
     private var connectionChannel: Channel?
+    private var authenticationDelegate: ClientAuthenticationDelegate?
+    private var isAuthenticated = false
     private var shellChannel: Channel?
     private var terminalColumns = 120
     private var terminalRows = 34
@@ -95,14 +110,22 @@ public final class TerminiSSHSession {
         }
     }
 
-    deinit {
-        connectionChannel?.close(promise: nil)
-        shellChannel?.close(promise: nil)
-        eventLoopGroup?.shutdownGracefully(queue: .global()) { _ in }
+    /// Creates a session with no terminal controller. Remote output and status lines go only to ``onRawOutput``,
+    /// and input goes through ``send(_:)``.
+    public init() {
+        controller = nil
     }
 
-    public func connect(configuration: TerminiSSHConfiguration) async {
+    deinit {
+        shellChannel?.close(promise: nil)
+        transportConnection?.closeWithoutWaiting()
+    }
+
+    /// Connects over `transport`, TCP to the configuration's host and port by default.
+    public func connect(configuration: TerminiSSHConfiguration, transport: TerminiSSHTransport = .tcp) async {
         await disconnect()
+        failure = nil
+        isAuthenticated = false
 
         let host = configuration.host.trimmingCharacters(in: .whitespacesAndNewlines)
         let username = configuration.username.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -110,14 +133,19 @@ public final class TerminiSSHSession {
         let privateKeyPEM = configuration.privateKeyPEM?.trimmingCharacters(in: .whitespacesAndNewlines)
         let startupCommand = configuration.startupCommand?.trimmingCharacters(in: .whitespacesAndNewlines)
         let hostKeyFingerprint = configuration.hostKeyFingerprint?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hostKeyAlias = configuration.hostKeyAlias?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !host.isEmpty, !username.isEmpty else {
+            failure = .authenticationFailed
             status = .failed("Missing SSH host or username.")
+            closeUnusedTransport(transport)
             return
         }
 
         guard !password.isEmpty || !(privateKeyPEM ?? "").isEmpty else {
+            failure = .authenticationFailed
             status = .failed("Missing SSH credentials.")
+            closeUnusedTransport(transport)
             return
         }
 
@@ -129,7 +157,9 @@ public final class TerminiSSHSession {
                 parsedPrivateKey = nil
             }
         } catch {
+            failure = .authenticationFailed
             status = .failed("Invalid SSH private key: \(error.localizedDescription)")
+            closeUnusedTransport(transport)
             return
         }
 
@@ -138,16 +168,14 @@ public final class TerminiSSHSession {
         resetTerminalSurface()
         appendStatusLine("[Termini] Connecting to \(endpointLabel)")
 
-        let eventLoopGroup = NIOTSEventLoopGroup()
-        self.eventLoopGroup = eventLoopGroup
-
         let authDelegate = ClientAuthenticationDelegate(
             username: username,
             password: password.isEmpty ? nil : password,
             privateKey: parsedPrivateKey
         )
+        authenticationDelegate = authDelegate
         let hostKeyValidator = HostKeyValidator(
-            host: host,
+            host: (hostKeyAlias?.isEmpty == false ? hostKeyAlias : nil) ?? host,
             port: configuration.port,
             policy: configuration.hostKeyPolicy,
             pinnedFingerprint: hostKeyFingerprint,
@@ -195,32 +223,45 @@ public final class TerminiSSHSession {
             }
         }
 
-        do {
-            let bootstrap = NIOTSConnectionBootstrap(group: eventLoopGroup)
-                .channelInitializer { channel in
-                    do {
-                        try channel.pipeline.syncOperations.addHandler(
-                            NIOSSHHandler(
-                                role: .client(
-                                    .init(
-                                        userAuthDelegate: authDelegate,
-                                        serverAuthDelegate: hostKeyValidator
-                                    )
-                                ),
-                                allocator: channel.allocator,
-                                inboundChildChannelInitializer: nil
-                            )
-                        )
-                        try channel.pipeline.syncOperations.addHandler(
-                            ConnectionErrorHandler(onError: errorCallback)
-                        )
-                        return channel.eventLoop.makeSucceededFuture(())
-                    } catch {
-                        return channel.eventLoop.makeFailedFuture(error)
-                    }
-                }
+        let authenticatedCallback: @Sendable () -> Void = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.isAuthenticated = true
+            }
+        }
 
-            let connectionChannel = try await bootstrap.connect(host: host, port: configuration.port).get()
+        do {
+            let channelInitializer: @Sendable (Channel) -> EventLoopFuture<Void> = { channel in
+                do {
+                    try channel.pipeline.syncOperations.addHandler(
+                        NIOSSHHandler(
+                            role: .client(
+                                .init(
+                                    userAuthDelegate: authDelegate,
+                                    serverAuthDelegate: hostKeyValidator
+                                )
+                            ),
+                            allocator: channel.allocator,
+                            inboundChildChannelInitializer: nil
+                        )
+                    )
+                    try channel.pipeline.syncOperations.addHandler(
+                        ConnectionErrorHandler(onError: errorCallback, onAuthenticated: authenticatedCallback)
+                    )
+                    return channel.eventLoop.makeSucceededFuture(())
+                } catch {
+                    return channel.eventLoop.makeFailedFuture(error)
+                }
+            }
+
+            let transportConnection = try await TerminiSSHTransportConnector.connect(
+                transport: transport,
+                host: host,
+                port: configuration.port,
+                connectTimeout: configuration.connectTimeout,
+                channelInitializer: channelInitializer
+            )
+            self.transportConnection = transportConnection
+            let connectionChannel = transportConnection.channel
             self.connectionChannel = connectionChannel
 
             let shellChannel = try await connectionChannel.pipeline
@@ -260,23 +301,19 @@ public final class TerminiSSHSession {
 
     public func disconnect() async {
         let shellChannel = self.shellChannel
-        let connectionChannel = self.connectionChannel
-        let eventLoopGroup = self.eventLoopGroup
+        let transportConnection = self.transportConnection
 
         self.shellChannel = nil
         self.connectionChannel = nil
-        self.eventLoopGroup = nil
+        self.transportConnection = nil
+        self.authenticationDelegate = nil
 
         if let shellChannel {
             try? await shellChannel.close().get()
         }
 
-        if let connectionChannel {
-            try? await connectionChannel.close().get()
-        }
-
-        if let eventLoopGroup {
-            try? await eventLoopGroup.shutdownGracefully()
+        if let transportConnection {
+            await transportConnection.close()
         }
 
         if case .failed = status {
@@ -333,11 +370,33 @@ public final class TerminiSSHSession {
     }
 
     private func handleConnectionError(_ error: Error) async {
+        // Only the first error of an attempt classifies it; the teardown it starts can raise more.
+        guard failure == nil, status != .disconnected else { return }
+        failure = classify(error)
         let message = error.localizedDescription
         appendStatusLine("[Termini] SSH error: \(message)")
         status = .failed(message)
         await disconnect()
         status = .failed(message)
+    }
+
+    private func classify(_ error: Error) -> TerminiSSHFailure {
+        if error is TerminiSSHHostKeyValidationError {
+            return .hostKeyRejected
+        }
+        if authenticationDelegate?.hasExhaustedOffers == true, !isAuthenticated {
+            return .authenticationFailed
+        }
+        if TerminiSSHTransportConnector.isConnectionRefused(error) {
+            return .refused
+        }
+        return isAuthenticated ? .disconnected : .unreachable
+    }
+
+    /// A stream that was handed over but never used still ends, so its tunnel doesn't linger.
+    private func closeUnusedTransport(_ transport: TerminiSSHTransport) {
+        guard case .stream(let stream) = transport else { return }
+        Task { await stream.close() }
     }
 
     /// Single output funnel — raw sink when set, else the
@@ -346,16 +405,17 @@ public final class TerminiSSHSession {
         if let onRawOutput {
             onRawOutput(data)
         } else {
-            controller.processRemoteOutput(data)
+            controller?.processRemoteOutput(data)
         }
     }
 
     private func appendStatusLine(_ line: String) {
+        guard showsStatusLines else { return }
         emitOutput(Data("\(line)\r\n".utf8))
     }
 
     private func resetTerminalSurface() {
-        controller.processRemoteOutput(Data("\u{001B}c".utf8))
+        controller?.processRemoteOutput(Data("\u{001B}c".utf8))
     }
 
     private func normalizeInput(_ text: String) -> String {
@@ -474,6 +534,13 @@ extension TerminiSSHSession {
         private let privateKey: NIOSSHPrivateKey?
         private var didOfferPassword = false
         private var didOfferPrivateKey = false
+        private let lock = NSLock()
+        private var exhausted = false
+
+        /// Whether every credential was offered and the server still asked for more.
+        var hasExhaustedOffers: Bool {
+            lock.withLock { exhausted }
+        }
 
         init(username: String, password: String?, privateKey: NIOSSHPrivateKey?) {
             self.username = username
@@ -509,6 +576,7 @@ extension TerminiSSHSession {
                 return
             }
 
+            lock.withLock { exhausted = true }
             nextChallengePromise.succeed(nil)
         }
     }
@@ -566,9 +634,18 @@ extension TerminiSSHSession {
         typealias InboundIn = Any
 
         private let onError: @Sendable (Error) -> Void
+        private let onAuthenticated: @Sendable () -> Void
 
-        init(onError: @escaping @Sendable (Error) -> Void) {
+        init(onError: @escaping @Sendable (Error) -> Void, onAuthenticated: @escaping @Sendable () -> Void) {
             self.onError = onError
+            self.onAuthenticated = onAuthenticated
+        }
+
+        func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+            if event is UserAuthSuccessEvent {
+                onAuthenticated()
+            }
+            context.fireUserInboundEventTriggered(event)
         }
 
         func errorCaught(context: ChannelHandlerContext, error: Error) {
