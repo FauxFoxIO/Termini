@@ -262,12 +262,38 @@ controller.onSizeChange = { size in
 }
 ```
 
+### SSH over your own transport
+
+`TerminiSSHSession` connects over TCP by default. Pass `.stream(_:)` to run the SSH
+connection over any duplex byte stream instead, such as a tunnel through another network:
+
+```swift
+final class MyTunnel: TerminiSSHByteStream {
+    func receive() async throws -> Data? { /* next server bytes, nil at end */ }
+    func send(_ data: Data) async throws { /* client bytes to the server */ }
+    func close() async { /* end both directions */ }
+}
+
+let session = TerminiSSHSession()            // headless: output goes to onRawOutput
+session.onRawOutput = { data in controller.processRemoteOutput(data) }
+await session.connect(
+    configuration: .init(host: "build-mac", username: "me", password: secret, hostKeyAlias: "build-mac"),
+    transport: .stream(MyTunnel())
+)
+if case .failed = session.status, session.failure == .refused { /* the server's port is closed */ }
+```
+
+`hostKeyAlias` keeps one trusted host key for a server you reach at several addresses or
+through a tunnel. `failure` says why the last attempt failed (unreachable, refused, host key,
+authentication, or disconnected after login), so callers can try another route only when it
+can help.
+
 ### SSH host verification
 
 `TerminiSSH` uses trust-on-first-use by default:
 
 - The first successful connection stores the server's `SHA256:` fingerprint.
-- Later connections to the same `host:port` must present the same fingerprint.
+- Later connections to the same `host:port` (or `hostKeyAlias:port`) must present the same fingerprint.
 - Require a pre-trusted host with `.requireStoredHostKey`.
 - Pin an explicit fingerprint with `hostKeyFingerprint`.
 - Bypass checks with `.acceptAny` — keep this a local-debug-only escape hatch.
