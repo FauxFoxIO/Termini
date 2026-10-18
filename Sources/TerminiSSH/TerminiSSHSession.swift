@@ -129,7 +129,8 @@ public final class TerminiSSHSession {
 
         let host = configuration.host.trimmingCharacters(in: .whitespacesAndNewlines)
         let username = configuration.username.trimmingCharacters(in: .whitespacesAndNewlines)
-        let password = configuration.password.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Spaces are valid password characters, so the password is used exactly as given.
+        let password = configuration.password
         let privateKeyPEM = configuration.privateKeyPEM?.trimmingCharacters(in: .whitespacesAndNewlines)
         let startupCommand = configuration.startupCommand?.trimmingCharacters(in: .whitespacesAndNewlines)
         let hostKeyFingerprint = configuration.hostKeyFingerprint?.trimmingCharacters(in: .whitespacesAndNewlines)
