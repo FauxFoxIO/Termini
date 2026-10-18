@@ -122,7 +122,10 @@ enum TerminiSSHTransportConnector {
     ) async throws -> TerminiSSHTransportConnection {
         let group = NIOTSEventLoopGroup()
         do {
+            // Without this, Network.framework parks a refused connection as "waiting" until the timeout, so the
+            // refusal would never reach the caller as ``TerminiSSHFailure/refused``.
             let channel = try await NIOTSConnectionBootstrap(group: group)
+                .channelOption(NIOTSChannelOptions.waitForActivity, value: false)
                 .connectTimeout(timeAmount(connectTimeout))
                 .channelInitializer(channelInitializer)
                 .connect(host: host, port: port)
