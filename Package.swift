@@ -117,6 +117,7 @@ let package = Package(
             dependencies: [
                 "Termini",
                 .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOSSH", package: "swift-nio-ssh"),
                 .product(name: "NIOTransportServices", package: "swift-nio-transport-services")
             ]
