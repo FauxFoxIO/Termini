@@ -37,7 +37,12 @@ public enum TerminiSSHFailure: Equatable, Sendable {
     case hostKeyRejected
     /// The server rejected every offered credential.
     case authenticationFailed
-    /// The connection failed after authentication.
+    /// The server rejected the offered key and accepts a password, but none was given.
+    case passwordRequired
+    /// The server accepted the credentials, then closed before a session opened. A Mac at its startup screen does
+    /// this once a password unlocks FileVault: it signs nobody in, unlocks the disk and continues starting up.
+    case closedAfterAuthentication
+    /// The connection failed after a session opened.
     case disconnected
 }
 
