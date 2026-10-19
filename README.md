@@ -42,7 +42,7 @@ demos, and go deeper.
 - [Guides](#guides) — appearance, SSH, custom transports, host verification, debugging
 - [Developing Termini itself](#developing-termini-itself)
 - [Good to know](#good-to-know)
-- [License](#license)
+- [Acknowledgements](#acknowledgements)
 
 ---
 
@@ -363,9 +363,7 @@ x86_64 archive, so Intel-compatible artifacts cannot be published accidentally.
 
 ---
 
-## License
-
-Termini is released under the [MIT License](LICENSE).
+## Acknowledgements
 
 Termini stands on [Ghostty](https://ghostty.org) — the bundled `GhosttyKit.xcframework`
 is Ghostty's terminal engine, © Mitchell Hashimoto and the Ghostty contributors, also
