@@ -11,6 +11,9 @@ public struct TerminiSSHConfiguration: Equatable, Sendable {
     public var username: String
     public var password: String
     public var privateKeyPEM: String?
+    /// A key the caller holds, such as one in the Secure Enclave, offered for public-key authentication ahead of
+    /// `privateKeyPEM` and the password.
+    public var identity: TerminiSSHIdentity?
     public var term: String
     public var startupCommand: String?
     // Run `startupCommand` as an SSH *exec* request
@@ -34,6 +37,7 @@ public struct TerminiSSHConfiguration: Equatable, Sendable {
         username: String,
         password: String = "",
         privateKeyPEM: String? = nil,
+        identity: TerminiSSHIdentity? = nil,
         term: String = "xterm-256color",
         startupCommand: String? = nil,
         useExecRequest: Bool = false,
@@ -47,6 +51,7 @@ public struct TerminiSSHConfiguration: Equatable, Sendable {
         self.username = username
         self.password = password
         self.privateKeyPEM = privateKeyPEM
+        self.identity = identity
         self.term = term
         self.startupCommand = startupCommand
         self.useExecRequest = useExecRequest
@@ -73,6 +78,9 @@ public final class TerminiSSHSession {
     public private(set) var endpointLabel: String = ""
     /// Why the last connection attempt failed; `nil` while connecting or after a clean disconnect.
     public private(set) var failure: TerminiSSHFailure?
+    /// Whether the server offered public-key authentication during the last attempt; `nil` before it said.
+    /// A server that offers only passwords, such as a Mac's startup screen while FileVault is locked, can't take a key.
+    public private(set) var serverOffersPublicKeys: Bool?
     /// Whether `[Termini]` connection status lines go to the output.
     public var showsStatusLines = true
     public var onStatusChange: ((Status) -> Void)? {
@@ -84,6 +92,7 @@ public final class TerminiSSHSession {
     private var connectionChannel: Channel?
     private var authenticationDelegate: ClientAuthenticationDelegate?
     private var isAuthenticated = false
+    private var isSessionReady = false
     private var shellChannel: Channel?
     private var terminalColumns = 120
     private var terminalRows = 34
@@ -126,6 +135,8 @@ public final class TerminiSSHSession {
         await disconnect()
         failure = nil
         isAuthenticated = false
+        isSessionReady = false
+        serverOffersPublicKeys = nil
 
         let host = configuration.host.trimmingCharacters(in: .whitespacesAndNewlines)
         let username = configuration.username.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -143,7 +154,7 @@ public final class TerminiSSHSession {
             return
         }
 
-        guard !password.isEmpty || !(privateKeyPEM ?? "").isEmpty else {
+        guard !password.isEmpty || !(privateKeyPEM ?? "").isEmpty || configuration.identity != nil else {
             failure = .authenticationFailed
             status = .failed("Missing SSH credentials.")
             closeUnusedTransport(transport)
@@ -152,7 +163,9 @@ public final class TerminiSSHSession {
 
         let parsedPrivateKey: NIOSSHPrivateKey?
         do {
-            if let privateKeyPEM, !privateKeyPEM.isEmpty {
+            if let identity = configuration.identity {
+                parsedPrivateKey = identity.privateKey
+            } else if let privateKeyPEM, !privateKeyPEM.isEmpty {
                 parsedPrivateKey = try Self.parsePrivateKey(privateKeyPEM)
             } else {
                 parsedPrivateKey = nil
@@ -197,6 +210,7 @@ public final class TerminiSSHSession {
         let readyCallback: @Sendable () -> Void = { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                self.isSessionReady = true
                 self.status = .connected
                 self.appendStatusLine("[Termini] Connected")
 
@@ -385,13 +399,17 @@ public final class TerminiSSHSession {
         if error is TerminiSSHHostKeyValidationError {
             return .hostKeyRejected
         }
+        if let authenticationDelegate {
+            serverOffersPublicKeys = authenticationDelegate.offeredMethods.map { $0.contains(.publicKey) }
+        }
         if authenticationDelegate?.hasExhaustedOffers == true, !isAuthenticated {
-            return .authenticationFailed
+            return authenticationDelegate?.couldUsePassword == true ? .passwordRequired : .authenticationFailed
         }
         if TerminiSSHTransportConnector.isConnectionRefused(error) {
             return .refused
         }
-        return isAuthenticated ? .disconnected : .unreachable
+        guard isAuthenticated else { return .unreachable }
+        return isSessionReady ? .disconnected : .closedAfterAuthentication
     }
 
     /// A stream that was handed over but never used still ends, so its tunnel doesn't linger.
@@ -537,10 +555,21 @@ extension TerminiSSHSession {
         private var didOfferPrivateKey = false
         private let lock = NSLock()
         private var exhausted = false
+        private var lastOfferedMethods: NIOSSHAvailableUserAuthenticationMethods?
 
         /// Whether every credential was offered and the server still asked for more.
         var hasExhaustedOffers: Bool {
             lock.withLock { exhausted }
+        }
+
+        /// The methods the server last said it accepts.
+        var offeredMethods: NIOSSHAvailableUserAuthenticationMethods? {
+            lock.withLock { lastOfferedMethods }
+        }
+
+        /// Whether the server accepts passwords and none was given, so asking for one could still sign in.
+        var couldUsePassword: Bool {
+            lock.withLock { password == nil && lastOfferedMethods?.contains(.password) == true }
         }
 
         init(username: String, password: String?, privateKey: NIOSSHPrivateKey?) {
@@ -553,6 +582,7 @@ extension TerminiSSHSession {
             availableMethods: NIOSSHAvailableUserAuthenticationMethods,
             nextChallengePromise: EventLoopPromise<NIOSSHUserAuthenticationOffer?>
         ) {
+            lock.withLock { lastOfferedMethods = availableMethods }
             if let privateKey, !didOfferPrivateKey, availableMethods.contains(.publicKey) {
                 didOfferPrivateKey = true
                 nextChallengePromise.succeed(
