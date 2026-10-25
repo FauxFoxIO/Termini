@@ -80,6 +80,38 @@ enum TerminiHardwareKeyTranslation {
         return .text
     }
 
+    /// The Return key, which a software keyboard reports as a newline in its inserted text.
+    static let softwareReturnKey = TerminiHardwareKeyDescriptor(
+        hidUsage: 40,
+        keyCode: 0x24,
+        modifiers: [],
+        text: nil,
+        unshiftedCodepoint: 0x0D
+    )
+
+    /// The Delete key, which a software keyboard reports as a delete-backward edit.
+    static let softwareDeleteKey = TerminiHardwareKeyDescriptor(
+        hidUsage: 42,
+        keyCode: 0x33,
+        modifiers: [],
+        text: nil,
+        unshiftedCodepoint: 0x7F
+    )
+
+    /// The key press a software keyboard's inserted text stands for, if any.
+    ///
+    /// A software keyboard reports Return as a newline in text, but a terminal needs the key: sent as pasted text,
+    /// the newline is wrapped in a bracketed paste once the program asks for one, and shells and full-screen
+    /// programs then insert a line break instead of running the line.
+    static func softwareKey(forInsertedText text: String) -> TerminiHardwareKeyDescriptor? {
+        switch text {
+        case "\n", "\r", "\r\n":
+            softwareReturnKey
+        default:
+            nil
+        }
+    }
+
     private static let hidToMacKeyCode: [UInt16: UInt16] = [
         // Letters.
         4: 0x00, 5: 0x0B, 6: 0x08, 7: 0x02, 8: 0x0E, 9: 0x03,
