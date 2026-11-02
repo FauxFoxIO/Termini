@@ -480,6 +480,10 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
         if controller?.forwardInputText(text) == true {
             return
         }
+        if let key = TerminiHardwareKeyTranslation.softwareKey(forInsertedText: text) {
+            sendSoftwareKey(key)
+            return
+        }
         sendText(text)
     }
 
@@ -488,7 +492,7 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
         if controller?.forwardDeleteBackward() == true {
             return
         }
-        sendText("\u{7F}")
+        sendSoftwareKey(TerminiHardwareKeyTranslation.softwareDeleteKey)
     }
 
     private func startRenderLoopIfNeeded() {
@@ -758,6 +762,14 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
                 len: len
             )
         )
+    }
+
+    /// Presses and releases a key for the software keyboard, which reports Return and Delete as text edits.
+    /// `ghostty_surface_text` pastes, so its newline would arrive bracketed and its delete would be filtered to a space.
+    private func sendSoftwareKey(_ descriptor: TerminiHardwareKeyDescriptor) {
+        guard inputEnabled, isHostAttached, let surface else { return }
+        sendHardwareKey(surface: surface, descriptor: descriptor, action: GHOSTTY_ACTION_PRESS)
+        sendHardwareKey(surface: surface, descriptor: descriptor, action: GHOSTTY_ACTION_RELEASE)
     }
 
     private func sendText(_ text: String) {
