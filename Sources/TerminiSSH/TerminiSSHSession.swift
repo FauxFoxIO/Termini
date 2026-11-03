@@ -23,6 +23,10 @@ public struct TerminiSSHConfiguration: Equatable, Sendable {
     // command dies. Default false so existing shell-typed call sites keep
     // their behavior.
     public var useExecRequest: Bool
+    /// Whether the channel asks the server for a pseudo-terminal. An exec channel that carries a binary protocol
+    /// turns it off: without a PTY the server translates no line endings, echoes nothing and keeps stderr out of
+    /// the output, which then holds only the command's stdout.
+    public var requestsPseudoTerminal: Bool
     public var hostKeyPolicy: TerminiSSHHostKeyPolicy
     public var hostKeyFingerprint: String?
     /// The name host-key verification uses instead of `host`, so one server reached at several addresses or through
@@ -41,6 +45,7 @@ public struct TerminiSSHConfiguration: Equatable, Sendable {
         term: String = "xterm-256color",
         startupCommand: String? = nil,
         useExecRequest: Bool = false,
+        requestsPseudoTerminal: Bool = true,
         hostKeyPolicy: TerminiSSHHostKeyPolicy = .trustOnFirstUse,
         hostKeyFingerprint: String? = nil,
         hostKeyAlias: String? = nil,
@@ -55,6 +60,7 @@ public struct TerminiSSHConfiguration: Equatable, Sendable {
         self.term = term
         self.startupCommand = startupCommand
         self.useExecRequest = useExecRequest
+        self.requestsPseudoTerminal = requestsPseudoTerminal
         self.hostKeyPolicy = hostKeyPolicy
         self.hostKeyFingerprint = hostKeyFingerprint
         self.hostKeyAlias = hostKeyAlias
@@ -292,6 +298,7 @@ public final class TerminiSSHSession {
                             ChannelHandler(
                                 term: configuration.term,
                                 execCommand: useExec ? startupCommand : nil,
+                                requestsPseudoTerminal: configuration.requestsPseudoTerminal || !useExec,
                                 initialColumns: initialColumns,
                                 initialRows: initialRows,
                                 initialPixelWidth: initialPixelWidth,
@@ -693,6 +700,7 @@ extension TerminiSSHSession {
         private let term: String
         // Non-nil → request exec(command) instead of a shell.
         private let execCommand: String?
+        private let requestsPseudoTerminal: Bool
         private let initialColumns: Int
         private let initialRows: Int
         private let initialPixelWidth: Int
@@ -705,6 +713,7 @@ extension TerminiSSHSession {
         init(
             term: String,
             execCommand: String? = nil,
+            requestsPseudoTerminal: Bool = true,
             initialColumns: Int,
             initialRows: Int,
             initialPixelWidth: Int,
@@ -716,6 +725,7 @@ extension TerminiSSHSession {
         ) {
             self.term = term
             self.execCommand = execCommand
+            self.requestsPseudoTerminal = requestsPseudoTerminal
             self.initialColumns = initialColumns
             self.initialRows = initialRows
             self.initialPixelWidth = initialPixelWidth
@@ -797,12 +807,18 @@ extension TerminiSSHSession {
                 onError(error)
             }
 
-            context.triggerUserOutboundEvent(ptyRequest, promise: ptyPromise)
+            if requestsPseudoTerminal {
+                context.triggerUserOutboundEvent(ptyRequest, promise: ptyPromise)
+            } else {
+                ptyPromise.succeed(())
+            }
         }
 
         func channelRead(context: ChannelHandlerContext, data: NIOAny) {
             let message = unwrapInboundIn(data)
             guard case .byteBuffer(let bytes) = message.data else { return }
+            // Without a PTY, stderr arrives separately; it isn't part of the command's output stream.
+            if !requestsPseudoTerminal, message.type != .channel { return }
 
             let output = Data(bytes.readableBytesView)
             guard !output.isEmpty else { return }
