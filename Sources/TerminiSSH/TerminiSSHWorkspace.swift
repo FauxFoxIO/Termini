@@ -84,6 +84,8 @@ public final class TerminiSSHWorkspace {
     public func connect() async {
         guard let configuration = connection.resolvedSSHConfiguration() else {
             let message = connection.validationError ?? "Connection details are incomplete."
+            // The live session goes first, so the workspace never reports a failure over a connection that is up.
+            await session?.disconnect()
             status = .failed(message)
             lastErrorMessage = message
             statusMessage = message

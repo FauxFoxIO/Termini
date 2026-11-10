@@ -77,16 +77,32 @@ public final class TerminiSSHSession {
         case failed(String)
     }
 
-    public private(set) var status: Status = .disconnected {
-        didSet { onStatusChange?(status) }
+    /// The session's phase, which owns the transport and channels of the attempt it belongs to. `onStatusChange`
+    /// fires only when the public status it maps to changes.
+    private var phase: Phase = .disconnected {
+        didSet {
+            let next = Status(phase)
+            if next != Status(oldValue) { onStatusChange?(next) }
+        }
     }
 
+    private var nextAttemptID: UInt64 = 0
+
+    public var status: Status { Status(phase) }
+
     public private(set) var endpointLabel: String = ""
-    /// Why the last connection attempt failed; `nil` while connecting or after a clean disconnect.
-    public private(set) var failure: TerminiSSHFailure?
-    /// Whether the server offered public-key authentication during the last attempt; `nil` before it said.
-    /// A server that offers only passwords, such as a Mac's startup screen while FileVault is locked, can't take a key.
-    public private(set) var serverOffersPublicKeys: Bool?
+    /// Why the connection attempt failed; `nil` unless the status is `.failed`.
+    public var failure: TerminiSSHFailure? {
+        if case .failed(let failure) = phase { return failure.reason }
+        return nil
+    }
+    /// Whether the server offered public-key authentication before the attempt failed; `nil` unless the status is
+    /// `.failed` and the server said. A server that offers only passwords, such as a Mac's startup screen while
+    /// FileVault is locked, can't take a key.
+    public var serverOffersPublicKeys: Bool? {
+        if case .failed(let failure) = phase { return failure.serverOffersPublicKeys }
+        return nil
+    }
     /// Whether `[Termini]` connection status lines go to the output.
     public var showsStatusLines = true
     public var onStatusChange: ((Status) -> Void)? {
@@ -94,12 +110,6 @@ public final class TerminiSSHSession {
     }
 
     private let controller: TerminiTerminalController?
-    private var transportConnection: TerminiSSHTransportConnection?
-    private var connectionChannel: Channel?
-    private var authenticationDelegate: ClientAuthenticationDelegate?
-    private var isAuthenticated = false
-    private var isSessionReady = false
-    private var shellChannel: Channel?
     private var terminalColumns = 120
     private var terminalRows = 34
     private var terminalPixelWidth = 0
@@ -132,17 +142,16 @@ public final class TerminiSSHSession {
     }
 
     deinit {
-        shellChannel?.close(promise: nil)
-        transportConnection?.closeWithoutWaiting()
+        phase.owned.closeWithoutWaiting()
     }
 
     /// Connects over `transport`, TCP to the configuration's host and port by default.
+    ///
+    /// A second call replaces the attempt in flight or the open connection: what the earlier one opened is closed,
+    /// and its late events are ignored. Returns once the session channel is open or the attempt has failed.
     public func connect(configuration: TerminiSSHConfiguration, transport: TerminiSSHTransport = .tcp) async {
-        await disconnect()
-        failure = nil
-        isAuthenticated = false
-        isSessionReady = false
-        serverOffersPublicKeys = nil
+        nextAttemptID += 1
+        let id = nextAttemptID
 
         let host = configuration.host.trimmingCharacters(in: .whitespacesAndNewlines)
         let username = configuration.username.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -154,16 +163,12 @@ public final class TerminiSSHSession {
         let hostKeyAlias = configuration.hostKeyAlias?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !host.isEmpty, !username.isEmpty else {
-            failure = .authenticationFailed
-            status = .failed("Missing SSH host or username.")
-            closeUnusedTransport(transport)
+            await reject("Missing SSH host or username.", transport: transport)
             return
         }
 
         guard !password.isEmpty || !(privateKeyPEM ?? "").isEmpty || configuration.identity != nil else {
-            failure = .authenticationFailed
-            status = .failed("Missing SSH credentials.")
-            closeUnusedTransport(transport)
+            await reject("Missing SSH credentials.", transport: transport)
             return
         }
 
@@ -177,23 +182,33 @@ public final class TerminiSSHSession {
                 parsedPrivateKey = nil
             }
         } catch {
-            failure = .authenticationFailed
-            status = .failed("Invalid SSH private key: \(error.localizedDescription)")
-            closeUnusedTransport(transport)
+            await reject("Invalid SSH private key: \(error.localizedDescription)", transport: transport)
             return
         }
 
-        endpointLabel = "\(username)@\(host):\(configuration.port)"
-        status = .connecting
-        resetTerminalSurface()
-        appendStatusLine("[Termini] Connecting to \(endpointLabel)")
-
+        // In exec mode the command runs as the channel's exec request; only shell mode types it into the remote shell.
+        let useExec = configuration.useExecRequest && !(startupCommand ?? "").isEmpty
         let authDelegate = ClientAuthenticationDelegate(
             username: username,
             password: password.isEmpty ? nil : password,
             privateKey: parsedPrivateKey
         )
-        authenticationDelegate = authDelegate
+        let attempt = Attempt(
+            id: id,
+            authentication: authDelegate,
+            typedStartupCommand: useExec || (startupCommand ?? "").isEmpty ? nil : startupCommand
+        )
+
+        endpointLabel = "\(username)@\(host):\(configuration.port)"
+        let replaced = replacePhase(with: .connecting(attempt, .opening(authenticated: false)))
+        resetTerminalSurface()
+        appendStatusLine("[Termini] Connecting to \(endpointLabel)")
+        await replaced.close()
+        guard isCurrent(id) else {
+            closeUnusedTransport(transport)
+            return
+        }
+
         let hostKeyValidator = HostKeyValidator(
             host: (hostKeyAlias?.isEmpty == false ? hostKeyAlias : nil) ?? host,
             port: configuration.port,
@@ -201,7 +216,8 @@ public final class TerminiSSHSession {
             pinnedFingerprint: hostKeyFingerprint,
             onNote: { [weak self] (note: String) in
                 Task { @MainActor [weak self] in
-                    self?.appendStatusLine("[Termini] \(note)")
+                    guard let self, self.isCurrent(id) else { return }
+                    self.appendStatusLine("[Termini] \(note)")
                 }
             }
         )
@@ -210,43 +226,34 @@ public final class TerminiSSHSession {
         let initialPixelWidth = terminalPixelWidth
         let initialPixelHeight = terminalPixelHeight
 
-        // In exec mode the command runs as the channel's
-        // exec request; only shell mode types it into the remote shell.
-        let useExec = configuration.useExecRequest && !(startupCommand ?? "").isEmpty
-        let readyCallback: @Sendable () -> Void = { [weak self] in
+        let readyCallback: @Sendable (Channel) -> Void = { [weak self] channel in
             Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.isSessionReady = true
-                self.status = .connected
-                self.appendStatusLine("[Termini] Connected")
-
-                guard !useExec, let startupCommand, !startupCommand.isEmpty else { return }
-                try? await Task.sleep(for: .milliseconds(180))
-                self.send("\(startupCommand)\r")
+                await self?.receive(.ready(channel), attempt: id).close()
             }
         }
 
         let outputCallback: @Sendable (Data) -> Void = { [weak self] data in
             Task { @MainActor [weak self] in
-                self?.emitOutput(data)
+                guard let self, self.isCurrent(id) else { return }
+                self.emitOutput(data)
             }
         }
 
         let exitCallback: @Sendable (Int?) -> Void = { [weak self] code in
             Task { @MainActor [weak self] in
-                self?.handleRemoteExit(code)
+                await self?.receive(.remoteExited(code), attempt: id).close()
             }
         }
 
         let errorCallback: @Sendable (Error) -> Void = { [weak self] error in
             Task { @MainActor [weak self] in
-                await self?.handleConnectionError(error)
+                await self?.receive(.failed(error), attempt: id).close()
             }
         }
 
         let authenticatedCallback: @Sendable () -> Void = { [weak self] in
             Task { @MainActor [weak self] in
-                self?.isAuthenticated = true
+                await self?.receive(.authenticated, attempt: id).close()
             }
         }
 
@@ -281,9 +288,10 @@ public final class TerminiSSHSession {
                 connectTimeout: configuration.connectTimeout,
                 channelInitializer: channelInitializer
             )
-            self.transportConnection = transportConnection
+            // A superseded attempt gets its transport back here and closes it.
+            await receive(.transportOpened(transportConnection), attempt: id).close()
+            guard isCurrent(id) else { return }
             let connectionChannel = transportConnection.channel
-            self.connectionChannel = connectionChannel
 
             let shellChannel = try await connectionChannel.pipeline
                 .handler(type: NIOSSHHandler.self)
@@ -315,34 +323,21 @@ public final class TerminiSSHSession {
                 }
                 .get()
 
-            self.shellChannel = shellChannel
+            await receive(.shellOpened(shellChannel), attempt: id).close()
         } catch {
-            await handleConnectionError(error)
+            await receive(.failed(error), attempt: id).close()
         }
     }
 
+    /// Leaves a connecting or connected session for `.disconnected` and closes what it held. A failed session keeps
+    /// its failure.
     public func disconnect() async {
-        let shellChannel = self.shellChannel
-        let transportConnection = self.transportConnection
-
-        self.shellChannel = nil
-        self.connectionChannel = nil
-        self.transportConnection = nil
-        self.authenticationDelegate = nil
-
-        if let shellChannel {
-            try? await shellChannel.close().get()
-        }
-
-        if let transportConnection {
-            await transportConnection.close()
-        }
-
-        if case .failed = status {
+        switch phase {
+        case .connecting, .connected:
+            await replacePhase(with: .disconnected).close()
+        case .disconnected, .failed:
             return
         }
-
-        status = .disconnected
     }
 
     public func updateTerminalSize(_ size: TerminiTerminalSize) {
@@ -359,7 +354,7 @@ public final class TerminiSSHSession {
     }
 
     public func send(_ data: Data) {
-        guard let shellChannel else { return }
+        guard let shellChannel = phase.link?.shell else { return }
         guard !data.isEmpty else { return }
         var buffer = shellChannel.allocator.buffer(capacity: data.count)
         buffer.writeBytes(data)
@@ -372,7 +367,7 @@ public final class TerminiSSHSession {
         terminalPixelWidth = max(pixelWidth, 0)
         terminalPixelHeight = max(pixelHeight, 0)
 
-        guard let shellChannel else { return }
+        guard let shellChannel = phase.link?.shell else { return }
         let request = SSHChannelRequestEvent.WindowChangeRequest(
             terminalCharacterWidth: terminalColumns,
             terminalRowHeight: terminalRows,
@@ -382,41 +377,137 @@ public final class TerminiSSHSession {
         shellChannel.triggerUserOutboundEvent(request, promise: nil)
     }
 
-    private func handleRemoteExit(_ code: Int?) {
-        if let code {
-            appendStatusLine("[Termini] Remote shell exited with status \(code)")
-        } else {
-            appendStatusLine("[Termini] Remote shell closed")
-        }
-        status = .disconnected
+    private func isCurrent(_ id: UInt64) -> Bool {
+        phase.attempt?.id == id
     }
 
-    private func handleConnectionError(_ error: Error) async {
-        // Only the first error of an attempt classifies it; the teardown it starts can raise more.
-        guard failure == nil, status != .disconnected else { return }
-        failure = classify(error)
+    /// Leaves the current phase for `next` and returns what the old phase owned, which the caller closes.
+    private func replacePhase(with next: Phase) -> Release {
+        let released = phase.owned
+        phase = next
+        return released
+    }
+
+    /// Fails the session because the configuration can't start an attempt.
+    private func reject(_ message: String, transport: TerminiSSHTransport) async {
+        let replaced = replacePhase(
+            with: .failed(Failure(reason: .authenticationFailed, message: message, serverOffersPublicKeys: nil))
+        )
+        closeUnusedTransport(transport)
+        await replaced.close()
+    }
+
+    /// The single funnel for what happens to an attempt. An event from an attempt that is no longer current changes
+    /// nothing and hands back the resources it carried; otherwise the phase moves and the result holds what the move
+    /// gave up. The caller closes the result.
+    private func receive(_ event: Event, attempt id: UInt64) -> Release {
+        guard let attempt = phase.attempt, attempt.id == id else { return event.carried }
+
+        switch event {
+        case .transportOpened(let transport):
+            guard case .connecting(_, .opening(let authenticated)) = phase else { return event.carried }
+            phase = .connecting(attempt, .handshaking(transport, authenticated: authenticated))
+            return Release()
+
+        case .authenticated:
+            switch phase {
+            case .connecting(_, .opening):
+                phase = .connecting(attempt, .opening(authenticated: true))
+            case .connecting(_, .handshaking(let transport, _)):
+                phase = .connecting(attempt, .handshaking(transport, authenticated: true))
+            case .connecting(_, .startingSession), .connected, .disconnected, .failed:
+                break
+            }
+            return Release()
+
+        case .shellOpened(let shell):
+            switch phase {
+            case .connecting(_, .handshaking(let transport, _)):
+                phase = .connecting(attempt, .startingSession(Link(transport: transport, shell: shell)))
+                return Release()
+            case .connecting(_, .opening):
+                return event.carried
+            case .connecting(_, .startingSession), .connected, .disconnected, .failed:
+                // The shell's ready reply already carried this channel.
+                return Release()
+            }
+
+        case .ready(let shell):
+            switch phase {
+            case .connecting(_, .handshaking(let transport, _)):
+                enterConnected(attempt, link: Link(transport: transport, shell: shell))
+                return Release()
+            case .connecting(_, .startingSession(let link)):
+                enterConnected(attempt, link: link)
+                return Release()
+            case .connecting(_, .opening):
+                return event.carried
+            case .connected, .disconnected, .failed:
+                return Release()
+            }
+
+        case .remoteExited(let code):
+            if let code {
+                appendStatusLine("[Termini] Remote shell exited with status \(code)")
+            } else {
+                appendStatusLine("[Termini] Remote shell closed")
+            }
+            return replacePhase(with: .disconnected)
+
+        case .failed(let error):
+            let failure = Self.classify(error, in: phase, attempt: attempt)
+            appendStatusLine("[Termini] SSH error: \(failure.message)")
+            return replacePhase(with: .failed(failure))
+        }
+    }
+
+    private func enterConnected(_ attempt: Attempt, link: Link) {
+        phase = .connected(attempt, link)
+        appendStatusLine("[Termini] Connected")
+
+        guard let startupCommand = attempt.typedStartupCommand else { return }
+        let id = attempt.id
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(180))
+            // The command goes only to the shell of the attempt that asked for it.
+            guard let self, self.isCurrent(id), case .connected = self.phase else { return }
+            self.send("\(startupCommand)\r")
+        }
+    }
+
+    private static func classify(_ error: Error, in phase: Phase, attempt: Attempt) -> Failure {
         let message = error.localizedDescription
-        appendStatusLine("[Termini] SSH error: \(message)")
-        status = .failed(message)
-        await disconnect()
-        status = .failed(message)
-    }
-
-    private func classify(_ error: Error) -> TerminiSSHFailure {
         if error is TerminiSSHHostKeyValidationError {
-            return .hostKeyRejected
+            return Failure(reason: .hostKeyRejected, message: message, serverOffersPublicKeys: nil)
         }
-        if let authenticationDelegate {
-            serverOffersPublicKeys = authenticationDelegate.offeredMethods.map { $0.contains(.publicKey) }
+
+        let authentication = attempt.authentication
+        let serverOffersPublicKeys = authentication.offeredMethods.map { $0.contains(.publicKey) }
+        let isAuthenticated: Bool
+        let isSessionReady: Bool
+        switch phase {
+        case .connecting(_, let stage):
+            isAuthenticated = stage.isAuthenticated
+            isSessionReady = false
+        case .connected:
+            isAuthenticated = true
+            isSessionReady = true
+        case .disconnected, .failed:
+            isAuthenticated = false
+            isSessionReady = false
         }
-        if authenticationDelegate?.hasExhaustedOffers == true, !isAuthenticated {
-            return authenticationDelegate?.couldUsePassword == true ? .passwordRequired : .authenticationFailed
+
+        let reason: TerminiSSHFailure
+        if authentication.hasExhaustedOffers, !isAuthenticated {
+            reason = authentication.couldUsePassword ? .passwordRequired : .authenticationFailed
+        } else if TerminiSSHTransportConnector.isConnectionRefused(error) {
+            reason = .refused
+        } else if !isAuthenticated {
+            reason = .unreachable
+        } else {
+            reason = isSessionReady ? .disconnected : .closedAfterAuthentication
         }
-        if TerminiSSHTransportConnector.isConnectionRefused(error) {
-            return .refused
-        }
-        guard isAuthenticated else { return .unreachable }
-        return isSessionReady ? .disconnected : .closedAfterAuthentication
+        return Failure(reason: reason, message: message, serverOffersPublicKeys: serverOffersPublicKeys)
     }
 
     /// A stream that was handed over but never used still ends, so its tunnel doesn't linger.
@@ -554,7 +645,7 @@ extension TerminiSSHSession {
         }
     }
 
-    private final class ClientAuthenticationDelegate: NIOSSHClientUserAuthenticationDelegate, @unchecked Sendable {
+    final class ClientAuthenticationDelegate: NIOSSHClientUserAuthenticationDelegate, @unchecked Sendable {
         private let username: String
         private let password: String?
         private let privateKey: NIOSSHPrivateKey?
@@ -705,7 +796,7 @@ extension TerminiSSHSession {
         private let initialRows: Int
         private let initialPixelWidth: Int
         private let initialPixelHeight: Int
-        private let onReady: @Sendable () -> Void
+        private let onReady: @Sendable (Channel) -> Void
         private let onOutput: @Sendable (Data) -> Void
         private let onExit: @Sendable (Int?) -> Void
         private let onError: @Sendable (Error) -> Void
@@ -718,7 +809,7 @@ extension TerminiSSHSession {
             initialRows: Int,
             initialPixelWidth: Int,
             initialPixelHeight: Int,
-            onReady: @escaping @Sendable () -> Void,
+            onReady: @escaping @Sendable (Channel) -> Void,
             onOutput: @escaping @Sendable (Data) -> Void,
             onExit: @escaping @Sendable (Int?) -> Void,
             onError: @escaping @Sendable (Error) -> Void
@@ -799,8 +890,10 @@ extension TerminiSSHSession {
                 onError(error)
             }
 
+            // The channel travels with the reply, so a session can close it if the attempt it opened for is gone.
+            let channel = context.channel
             shellPromise.futureResult.whenSuccess { [onReady] in
-                onReady()
+                onReady(channel)
             }
 
             shellPromise.futureResult.whenFailure { [onError] error in

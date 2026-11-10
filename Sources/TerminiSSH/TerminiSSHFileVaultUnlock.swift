@@ -48,7 +48,6 @@ extension TerminiSSHSession {
         switch session.status {
         case .connected, .connecting:
             // The shell channel opened; its ready reply may still be on the way.
-            if let failure = session.failure { return .failed(failure, "") }
             // Some startup screens open a session and close it straight away; a quiet close counts as an unlock.
             let (statusChanges, continuation) = AsyncStream<Status>.makeStream()
             // Setting the handler reports the current status first, then every change.
@@ -91,7 +90,8 @@ extension TerminiSSHSession {
                 return .failed(.unreachable, message)
             }
         case .disconnected:
-            return .failed(session.failure ?? .unreachable, "")
+            // The remote closed before this looked; a failure would have left the status `.failed`.
+            return .failed(.unreachable, "")
         }
     }
 }

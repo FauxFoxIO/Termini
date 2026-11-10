@@ -283,6 +283,9 @@ await session.connect(
 if case .failed = session.status, session.failure == .refused { /* the server's port is closed */ }
 ```
 
+A second `connect` replaces the attempt in flight or the open connection: what the earlier one
+opened is closed and its late events are ignored.
+
 `hostKeyAlias` keeps one trusted host key for a server you reach at several addresses or
 through a tunnel. `failure` says why the last attempt failed (unreachable, refused, host key,
 authentication, or disconnected after login), so callers can try another route only when it
