@@ -1,6 +1,6 @@
 # Termini
 
-`../reports/rearchitecture-2026/PLAN.md` is the source of truth for how Faux Fox uses this repository and wins over this file. Termini is a SwiftUI terminal library that wraps Ghostty's terminal engine (`GhosttyKit.xcframework`): the `Termini` renderer and local shell, and the `TerminiSSH` client over SwiftNIO SSH. Faux Fox maintains it at `FauxFoxIO/Termini`. Mirage uses it for the terminal people use (macOS Remote Login over SSH, PLAN 1.10).
+Termini is a SwiftUI terminal library that wraps Ghostty's terminal engine (`GhosttyKit.xcframework`): the `Termini` renderer and local shell, and the `TerminiSSH` client over SwiftNIO SSH. Faux Fox maintains it at `FauxFoxIO/Termini`. Mirage uses it for the terminal people use (macOS Remote Login over SSH).
 
 ## License and attribution
 
