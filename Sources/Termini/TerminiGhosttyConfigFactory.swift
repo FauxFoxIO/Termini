@@ -55,7 +55,9 @@ extension TerminiTerminalAppearance {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    var hasRuntimeFontOverride: Bool {
-        clampedGhosttyFontSize != nil || normalizedFontFamilyName != nil
+    /// Whether a surface needs a config of its own: a font override, or a host's extra config files (colours,
+    /// background opacity), which reach a surface only through its config.
+    var hasRuntimeConfigOverride: Bool {
+        clampedGhosttyFontSize != nil || normalizedFontFamilyName != nil || !extraConfigFilePaths.isEmpty
     }
 }

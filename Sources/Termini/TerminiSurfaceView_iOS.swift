@@ -816,11 +816,13 @@ public final class SurfaceContainerView: UIView, UIKeyInput, UITextInputTraits, 
 
         let fontSizeChanged = lastAppliedAppearance.fontSize != terminalAppearance.fontSize
         let fontFamilyChanged = lastAppliedAppearance.fontFamily != terminalAppearance.fontFamily
-        let shouldApplyFontConfig = fontSizeChanged
+        let extraConfigChanged = lastAppliedAppearance.extraConfigFilePaths != terminalAppearance.extraConfigFilePaths
+        let shouldApplyConfig = fontSizeChanged
             || fontFamilyChanged
-            || (force && terminalAppearance.hasRuntimeFontOverride)
+            || extraConfigChanged
+            || (force && terminalAppearance.hasRuntimeConfigOverride)
 
-        if shouldApplyFontConfig {
+        if shouldApplyConfig {
             guard let config = runtime.makeSurfaceConfig(for: terminalAppearance) else {
                 canCommitAppearanceState = false
                 return
